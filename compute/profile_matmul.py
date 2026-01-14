@@ -7,6 +7,7 @@ import torch
 import torch.profiler
 from torch.profiler import ExecutionTraceObserver
 import os
+import argparse
 from typing import Dict, Any, Tuple
 
 from matmul_config import (
@@ -17,7 +18,6 @@ from matmul_config import (
     WAIT_STEPS,
     ACTIVE_STEPS,
     RANDOM_SEED,
-    OUTPUT_DIR,
 )
 
 
@@ -115,6 +115,21 @@ def run_single_config(config: Dict[str, Any]) -> None:
 
 def main():
     """Main execution function."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Profile matrix multiplications with frontier LLM dimensions'
+    )
+    parser.add_argument(
+        '--output-name',
+        type=str,
+        default='traces_matmul',
+        help='Name for the output directory and trace files (default: traces_matmul)'
+    )
+    args = parser.parse_args()
+    
+    # Set output directory based on CLI argument
+    output_dir = f'./{args.output_name}'
+    
     torch.manual_seed(RANDOM_SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(RANDOM_SEED)
@@ -122,9 +137,9 @@ def main():
     
     configs = generate_experiment_configs()
     print(f"Matmul Profiling: {len(configs)} configurations, {REPEAT_COUNT} repeats")
-    print(f"Output: {OUTPUT_DIR}\n")
+    print(f"Output: {output_dir}\n")
     
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
     # Filter configs by device availability
     device = configs[0]['device'] if configs else 'cpu'
@@ -136,18 +151,23 @@ def main():
         return
     
     # Warmup all configurations
-    print("Running warmup iterations...")
-    for config in configs:
+    print(f"Running warmup iterations ({WARMUP_ITERATIONS} iterations × {len(configs)} configs = {WARMUP_ITERATIONS * len(configs)} total)...")
+    for i, config in enumerate(configs):
+        if i % 100 == 0:
+            print(f"  Warmup progress: {i}/{len(configs)} configs...")
         for _ in range(WARMUP_ITERATIONS):
             run_single_config(config)
     
     if device == 'cuda':
         torch.cuda.synchronize()
     
-    print(f"Starting profiling of {len(configs)} configs x {REPEAT_COUNT} repeats...")
+    print("Warmup complete.")
     
-    # Setup Chakra ET observer
-    chakra_output_path = os.path.join(OUTPUT_DIR, "CPU_trace")
+    print(f"Starting profiling of {len(configs)} configs x {REPEAT_COUNT} repeats...")
+    print(f"Total profiling steps: {(WAIT_STEPS + ACTIVE_STEPS) * REPEAT_COUNT}")
+    
+    # Setup Chakra ET observer with custom name
+    chakra_output_path = os.path.join(output_dir, f"{args.output_name}_CPU_trace")
     et_observer = ExecutionTraceObserver()
     et_observer.register_callback(chakra_output_path + ".json")
     et_observer.start()
@@ -165,7 +185,7 @@ def main():
             active=ACTIVE_STEPS,
             repeat=REPEAT_COUNT
         ),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler(OUTPUT_DIR),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir),
         record_shapes=True,
         profile_memory=True,
         with_stack=True,
@@ -173,15 +193,18 @@ def main():
         # Total steps = (wait + active) * repeat
         total_steps = (WAIT_STEPS + ACTIVE_STEPS) * REPEAT_COUNT
         for step in range(total_steps):
+            print(f"  Profiling step {step+1}/{total_steps}...")
             # Run all configs in this step
             for config in configs:
                 run_single_config(config)
             prof.step()
+            if device == 'cuda':
+                torch.cuda.synchronize()
     
     et_observer.stop()
     et_observer.unregister_callback()
     
-    print(f"\nComplete! Traces saved to {OUTPUT_DIR}/")
+    print(f"\nComplete! Traces saved to {output_dir}/")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,18 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Check if python3-venv package is installed (Debian/Ubuntu)
+PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
+
+if command -v dpkg &> /dev/null; then
+    if ! dpkg -l python${PYTHON_VERSION}-venv 2>/dev/null | grep -q '^ii'; then
+        echo "python${PYTHON_VERSION}-venv package not found. Installing..."
+        sudo apt update -qq
+        sudo apt install -y python${PYTHON_VERSION}-venv
+        echo "Successfully installed python${PYTHON_VERSION}-venv"
+    fi
+fi
+
 echo "Creating virtual environment..."
 python3 -m venv venv
 
