@@ -8,6 +8,9 @@
 #
 # Options:
 #   --gpus N          Number of GPUs to use (default: all available)
+#   --seed N          Random seed for config ordering (default: 42)
+#   --repeat N        Number of repetitions per config (default: 10)
+#   --no-warmup       Skip thermal warmup and warmup iterations (faster testing)
 #   --lock-clocks     Lock GPU clocks to max frequency (requires sudo)
 #   --help            Show this help message
 ################################################################################
@@ -16,8 +19,11 @@ set -e  # Exit on error
 
 # Default values
 NUM_GPUS=""
+RANDOM_SEED=42
+REPEAT_COUNT=10
+NO_WARMUP=false
 LOCK_CLOCKS=false
-OUTPUT_DIR="./traces"
+BASE_OUTPUT_DIR="./traces"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -26,12 +32,24 @@ while [[ $# -gt 0 ]]; do
             NUM_GPUS="$2"
             shift 2
             ;;
+        --seed)
+            RANDOM_SEED="$2"
+            shift 2
+            ;;
+        --repeat)
+            REPEAT_COUNT="$2"
+            shift 2
+            ;;
+        --no-warmup)
+            NO_WARMUP=true
+            shift
+            ;;
         --lock-clocks)
             LOCK_CLOCKS=true
             shift
             ;;
         --help)
-            head -n 13 "$0" | tail -n 10
+            head -n 14 "$0" | tail -n 13
             exit 0
             ;;
         *)
@@ -44,13 +62,19 @@ done
 
 # Detect number of GPUs if not specified
 if [ -z "$NUM_GPUS" ]; then
-    NUM_GPUS=$(python -c "import torch; print(torch.cuda.device_count())")
+    NUM_GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())")
     echo "Auto-detected $NUM_GPUS GPUs"
 fi
 
+# Create timestamped output directory
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+OUTPUT_DIR="${BASE_OUTPUT_DIR}/run_${TIMESTAMP}"
+mkdir -p "$OUTPUT_DIR"
+echo "Output directory: $OUTPUT_DIR"
+
 # Validate environment
 echo "Validating environment..."
-python -c "
+python3 -c "
 import sys
 sys.path.append('../../..')
 from networking.utils import validate_environment
@@ -103,8 +127,11 @@ echo "========================================================================"
 echo "POINT-TO-POINT COMMUNICATION PROFILING"
 echo "========================================================================"
 echo "GPUs: $NUM_GPUS"
+echo "Random seed: $RANDOM_SEED"
+echo "Repetitions per config: $REPEAT_COUNT"
 echo "Output directory: $OUTPUT_DIR"
 echo "Locked clocks: $LOCK_CLOCKS"
+echo "No warmup: $NO_WARMUP"
 echo ""
 
 # Show GPU status
@@ -142,7 +169,11 @@ torchrun \
     --nproc_per_node=$NUM_GPUS \
     --nnodes=1 \
     --node_rank=0 \
-    profile_p2p.py
+    profile_p2p.py \
+    --output-dir="$OUTPUT_DIR" \
+    --seed=$RANDOM_SEED \
+    --repeat=$REPEAT_COUNT \
+    $([ "$NO_WARMUP" = true ] && echo "--no-warmup")
 
 RETVAL=$?
 

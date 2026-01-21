@@ -1,0 +1,52 @@
+gpu:
+  rank: 1
+  gpu_id: 1
+  timestamp: '2026-01-21T18:25:30.910113'
+  gpu_name: Tesla T4
+  compute_capability: '7.5'
+  total_memory_gb: 14.56317138671875
+  multiprocessor_count: 40
+  driver_version: 580.95.05
+  clock_graphics_mhz: '1590'
+  clock_sm_mhz: '1590'
+  clock_memory_mhz: '5000'
+  clock_graphics_max_mhz: '1590'
+  clock_sm_max_mhz: '1590'
+  clock_memory_max_mhz: '5001'
+  temperature_c: '53'
+  temperature_max_c: '[N/A]'
+  power_draw_w: '36.81'
+  power_limit_w: '70.00'
+  utilization_gpu_percent: '0'
+  utilization_memory_percent: '0'
+  memory_used_mb: '2333'
+  memory_total_mb: '15360'
+  cuda_version: '12.4'
+  pytorch_version: !!python/object/new:torch.torch_version.TorchVersion
+  - 2.6.0+cu124
+  cudnn_version: 90100
+drift:
+  start:
+    rank: 1
+    description: drift_measurement
+    duration_requested_s: 30
+    gpu_elapsed_ms: 29999.77734375
+    cpu_elapsed_ms: 30000.366879
+    drift_ratio: 0.9999803490653172
+    drift_percent: -0.0019650934682813315
+  end:
+    rank: 1
+    description: drift_measurement
+    duration_requested_s: 30
+    gpu_elapsed_ms: 30034.310546875
+    cpu_elapsed_ms: 30034.435248
+    drift_ratio: 0.9999958480616009
+    drift_percent: -0.00041519383990884506
+experiment:
+  name: point_to_point_profiling
+  timestamp: '2026-01-21T18:25:31.637697'
+  output_dir: ./traces/run_20260121_180600
+  random_seed: 811
+  num_configs: 372
+  repetitions: 100
+  total_tests: 37200

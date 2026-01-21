@@ -11,20 +11,21 @@ import time
 import random
 import csv
 import os
+import argparse
 from datetime import datetime
 from typing import Dict, Any
 
 from p2p_config import (
     MESSAGE_SIZES,
     WARMUP_ITERATIONS,
-    REPEAT_COUNT,
-    RANDOM_SEED,
+    REPEAT_COUNT as DEFAULT_REPEAT_COUNT,
+    RANDOM_SEED as DEFAULT_RANDOM_SEED,
     BUFFER_DTYPE,
     THERMAL_WARMUP_DURATION,
     THERMAL_TARGET_TEMP,
     TEMP_MONITOR_INTERVAL,
     DRIFT_MEASUREMENT_DURATION,
-    OUTPUT_DIR,
+    OUTPUT_DIR as DEFAULT_OUTPUT_DIR,
     generate_all_configs,
     get_config_summary,
 )
@@ -111,6 +112,23 @@ def save_execution_log(execution_log, output_path):
 def main():
     """Main profiling function."""
     
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Profile point-to-point GPU communication')
+    parser.add_argument('--output-dir', type=str, default=DEFAULT_OUTPUT_DIR,
+                        help='Output directory for traces and logs')
+    parser.add_argument('--seed', type=int, default=DEFAULT_RANDOM_SEED,
+                        help='Random seed for config ordering')
+    parser.add_argument('--repeat', type=int, default=DEFAULT_REPEAT_COUNT,
+                        help='Number of repetitions per config (default: 10)')
+    parser.add_argument('--no-warmup', action='store_true',
+                        help='Skip thermal warmup and warmup iterations (faster for testing)')
+    args = parser.parse_args()
+    
+    OUTPUT_DIR = args.output_dir
+    RANDOM_SEED = args.seed
+    REPEAT_COUNT = args.repeat
+    SKIP_WARMUP = args.no_warmup
+    
     # ========================================================================
     # 1. INITIALIZATION
     # ========================================================================
@@ -127,8 +145,28 @@ def main():
     random.seed(RANDOM_SEED)
     torch.manual_seed(RANDOM_SEED)
     
-    # Create output directory
+    # Create output directory (all ranks in case of race condition)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    barrier_all()
+    
+    # Save run info (rank 0 only)
+    if rank == 0:
+        run_info_path = os.path.join(OUTPUT_DIR, 'run_info.txt')
+        with open(run_info_path, 'w') as f:
+            f.write("=" * 80 + "\n")
+            f.write("POINT-TO-POINT COMMUNICATION PROFILING - RUN INFO\n")
+            f.write("=" * 80 + "\n\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"Output Directory: {OUTPUT_DIR}\n\n")
+            f.write("Configuration:\n")
+            f.write(f"  GPUs (world size): {world_size}\n")
+            f.write(f"  Random seed: {RANDOM_SEED}\n")
+            f.write(f"  Message sizes: {len(MESSAGE_SIZES)} (from {MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)\n")
+            f.write(f"  Warmup iterations: {WARMUP_ITERATIONS}\n")
+            f.write(f"  Repeat count: {REPEAT_COUNT}\n")
+            f.write(f"  Thermal warmup: {THERMAL_WARMUP_DURATION}s to {THERMAL_TARGET_TEMP}°C\n")
+            f.write(f"  Drift measurement: {DRIFT_MEASUREMENT_DURATION}s\n\n")
+            f.write("=" * 80 + "\n")
     
     # ========================================================================
     # 2. TEMPERATURE MONITORING (Start)
@@ -147,15 +185,19 @@ def main():
     # 3. THERMAL WARMUP
     # ========================================================================
     
-    print_once(f"\nThermal warmup...")
-    thermal_warmup(
-        device=f'cuda:{rank}',
-        duration=THERMAL_WARMUP_DURATION,
-        target_temp_min=THERMAL_TARGET_TEMP
-    )
-    
-    barrier_all()
-    print_once("All GPUs warmed up")
+    if not SKIP_WARMUP:
+        print_once(f"\nThermal warmup...")
+        thermal_warmup(
+            device=f'cuda:{rank}',
+            duration_seconds=THERMAL_WARMUP_DURATION,
+            target_temp_min=THERMAL_TARGET_TEMP
+        )
+        
+        barrier_all()
+        print_once("All GPUs warmed up")
+    else:
+        print_once(f"\nSkipping thermal warmup (--no-warmup enabled)")
+        barrier_all()
     
     # ========================================================================
     # 4. INITIAL CLOCK DRIFT MEASUREMENT
@@ -197,19 +239,23 @@ def main():
     # 7. WARMUP PHASE (No profiling)
     # ========================================================================
     
-    print_once(f"\nWarmup phase ({WARMUP_ITERATIONS} iterations per config)...")
-    print_once(f"Total warmup operations: {len(configs) * WARMUP_ITERATIONS}")
-    
-    for i, config in enumerate(configs):
-        if rank == 0 and i % 100 == 0:
-            print(f"  Warmup progress: {i}/{len(configs)} configs...")
+    if not SKIP_WARMUP:
+        print_once(f"\nWarmup phase ({WARMUP_ITERATIONS} iterations per config)...")
+        print_once(f"Total warmup operations: {len(configs) * WARMUP_ITERATIONS}")
         
-        for _ in range(WARMUP_ITERATIONS):
-            run_p2p_test(rank, config, buffer_pool)
-    
-    barrier_all()
-    torch.cuda.synchronize()
-    print_once("Warmup complete")
+        for i, config in enumerate(configs):
+            if rank == 0 and i % 100 == 0:
+                print(f"  Warmup progress: {i}/{len(configs)} configs...")
+            
+            for _ in range(WARMUP_ITERATIONS):
+                run_p2p_test(rank, config, buffer_pool)
+        
+        barrier_all()
+        torch.cuda.synchronize()
+        print_once("Warmup complete")
+    else:
+        print_once(f"\nSkipping warmup iterations (--no-warmup enabled)")
+        barrier_all()
     
     # ========================================================================
     # 8. PROFILED EXECUTION
@@ -220,24 +266,27 @@ def main():
     print_once(f"Total profiled operations: {len(configs) * REPEAT_COUNT}")
     
     # Configure profiler schedule
+    # Set repeat to match total number of step() calls (once per config per repetition)
+    total_steps = len(configs) * REPEAT_COUNT
     schedule = configure_profiler(
         wait_steps=0,
         warmup_steps=0,
         active_steps=1,
-        repeat_count=REPEAT_COUNT
+        repeat_count=total_steps
     )
     
     # Initialize execution log (rank 0 only)
     execution_log = [] if rank == 0 else None
     
     # Profile with both CPU and GPU tracing
+    # Note: with_stack=False due to Python 3.13 incompatibility with PyTorch profiler stack tracking
     with ProfilerContext(
         rank=rank,
         output_dir=OUTPUT_DIR,
         schedule=schedule,
         record_shapes=True,
         profile_memory=True,
-        with_stack=True,
+        with_stack=False,
     ) as prof:
         
         for rep in range(REPEAT_COUNT):
@@ -276,9 +325,11 @@ def main():
                         'timestamp_end_ns': end_time,
                         'duration_ns': end_time - start_time,
                     })
+                
+                # Step profiler after each config
+                prof.step()
             
-            # Step profiler after each repetition
-            prof.step()
+            # Synchronize after each repetition
             torch.cuda.synchronize()
     
     print_once("Profiled execution complete")
@@ -341,6 +392,7 @@ def main():
     metadata['experiment'] = {
         'name': 'point_to_point_profiling',
         'timestamp': datetime.now().isoformat(),
+        'output_dir': OUTPUT_DIR,
         'random_seed': RANDOM_SEED,
         'num_configs': len(configs),
         'repetitions': REPEAT_COUNT,

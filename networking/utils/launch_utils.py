@@ -9,7 +9,8 @@ import os
 import subprocess
 import time
 import torch
-from typing import List, Optional, Tuple
+import torch.distributed
+from typing import Dict, List, Optional, Tuple
 
 
 def validate_environment() -> Tuple[bool, List[str]]:
@@ -38,11 +39,10 @@ def validate_environment() -> Tuple[bool, List[str]]:
     
     # Check NCCL
     try:
-        import torch.distributed
         if not hasattr(torch.distributed, 'is_nccl_available') or \
            not torch.distributed.is_nccl_available():
             issues.append("NCCL not available")
-    except ImportError:
+    except (ImportError, AttributeError):
         issues.append("torch.distributed not available")
     
     # Check nvidia-smi

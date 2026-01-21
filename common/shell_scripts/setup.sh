@@ -17,10 +17,23 @@ PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
 
 if command -v dpkg &> /dev/null; then
     if ! dpkg -l python${PYTHON_VERSION}-venv 2>/dev/null | grep -q '^ii'; then
-        echo "python${PYTHON_VERSION}-venv package not found. Installing..."
-        sudo apt update -qq
-        sudo apt install -y python${PYTHON_VERSION}-venv
-        echo "Successfully installed python${PYTHON_VERSION}-venv"
+        echo "python${PYTHON_VERSION}-venv package not found. Checking if venv module works..."
+        
+        # Try to see if venv module works anyway (Python 3.13+ often has it built-in)
+        if python3 -m venv --help &> /dev/null; then
+            echo "venv module is available built-in, skipping package installation."
+        else
+            # Only try to install if the package exists in repositories
+            if apt-cache search "^python${PYTHON_VERSION}-venv$" | grep -q "python${PYTHON_VERSION}-venv"; then
+                echo "Installing python${PYTHON_VERSION}-venv package..."
+                sudo apt update -qq
+                sudo apt install -y python${PYTHON_VERSION}-venv
+                echo "Successfully installed python${PYTHON_VERSION}-venv"
+            else
+                echo "Warning: python${PYTHON_VERSION}-venv package not available in repositories."
+                echo "Attempting to use built-in venv module..."
+            fi
+        fi
     fi
 fi
 
@@ -64,6 +77,10 @@ case $choice in
 esac
 
 echo ""
+echo "Installing analysis packages..."
+pip install pandas matplotlib seaborn scipy pyyaml -q
+
+echo ""
 echo "Setup complete."
 echo ""
 
@@ -82,4 +99,3 @@ echo ""
 echo "To activate in new terminals: source venv/bin/activate"
 echo "To run profiling: cd compute && python profile_matmul.py"
 echo "To switch CUDA versions: ./common/shell_scripts/swap_pytorch_cuda.sh <118|121|124>"
-

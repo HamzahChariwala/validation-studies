@@ -1,0 +1,76 @@
+gpu:
+  rank: 0
+  gpu_id: 0
+  timestamp: '2026-01-21T16:45:26.952126'
+  gpu_name: Tesla T4
+  compute_capability: '7.5'
+  total_memory_gb: 14.56317138671875
+  multiprocessor_count: 40
+  driver_version: 580.95.05
+  clock_graphics_mhz: '1590'
+  clock_sm_mhz: '1590'
+  clock_memory_mhz: '5000'
+  clock_graphics_max_mhz: '1590'
+  clock_sm_max_mhz: '1590'
+  clock_memory_max_mhz: '5001'
+  temperature_c: '50'
+  temperature_max_c: '[N/A]'
+  power_draw_w: '36.71'
+  power_limit_w: '70.00'
+  utilization_gpu_percent: '0'
+  utilization_memory_percent: '0'
+  memory_used_mb: '2333'
+  memory_total_mb: '15360'
+  cuda_version: '12.4'
+  pytorch_version: !!python/object/new:torch.torch_version.TorchVersion
+  - 2.6.0+cu124
+  cudnn_version: 90100
+topology:
+  topo_matrix: "\t\e[4mGPU0\tGPU1\tGPU2\tGPU3\tCPU Affinity\tNUMA Affinity\tGPU NUMA\
+    \ ID\e[0m\nGPU0\t X \tNODE\tNODE\tNODE\t0-15\t0\t\tN/A\nGPU1\tNODE\t X \tNODE\t\
+    NODE\t0-15\t0\t\tN/A\nGPU2\tNODE\tNODE\t X \tNODE\t0-15\t0\t\tN/A\nGPU3\tNODE\t\
+    NODE\tNODE\t X \t0-15\t0\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection\
+    \ traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n\
+    \  NODE = Connection traversing PCIe as well as the interconnect between PCIe\
+    \ Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well\
+    \ as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple\
+    \ PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection\
+    \ traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded\
+    \ set of # NVLinks\n"
+  nvlink_status: ''
+nccl:
+  nccl_version: 2.21.5
+  environment:
+    NCCL_DEBUG: INFO
+    NCCL_DEBUG_SUBSYS: INIT,COLL
+    NCCL_IB_DISABLE: not set
+    NCCL_P2P_DISABLE: not set
+    NCCL_SHM_DISABLE: not set
+    NCCL_SOCKET_IFNAME: not set
+    NCCL_ALGO: not set
+    NCCL_PROTO: not set
+drift:
+  start:
+    rank: 0
+    description: drift_measurement
+    duration_requested_s: 30
+    gpu_elapsed_ms: 30000.51171875
+    cpu_elapsed_ms: 30000.408313
+    drift_ratio: 1.0000034468114207
+    drift_percent: 0.0003446811420726448
+  end:
+    rank: 0
+    description: drift_measurement
+    duration_requested_s: 30
+    gpu_elapsed_ms: 30000.900390625
+    cpu_elapsed_ms: 30000.890984
+    drift_ratio: 1.0000003135448545
+    drift_percent: 3.135448545243946e-05
+experiment:
+  name: point_to_point_profiling
+  timestamp: '2026-01-21T16:45:27.742361'
+  output_dir: ./traces/run_20260121_164227
+  random_seed: 811
+  num_configs: 372
+  repetitions: 10
+  total_tests: 3720
