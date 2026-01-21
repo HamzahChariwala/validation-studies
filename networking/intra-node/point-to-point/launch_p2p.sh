@@ -10,6 +10,7 @@
 #   --gpus N          Number of GPUs to use (default: all available)
 #   --seed N          Random seed for config ordering (default: 42)
 #   --repeat N        Number of repetitions per config (default: 10)
+#   --linear-sizes N  Use N linearly-spaced sizes (default: off, uses 31 power-of-2 sizes)
 #   --no-warmup       Skip thermal warmup and warmup iterations (faster testing)
 #   --lock-clocks     Lock GPU clocks to max frequency (requires sudo)
 #   --help            Show this help message
@@ -21,6 +22,7 @@ set -e  # Exit on error
 NUM_GPUS=""
 RANDOM_SEED=42
 REPEAT_COUNT=10
+LINEAR_SIZES=""
 NO_WARMUP=false
 LOCK_CLOCKS=false
 BASE_OUTPUT_DIR="./traces"
@@ -40,6 +42,10 @@ while [[ $# -gt 0 ]]; do
             REPEAT_COUNT="$2"
             shift 2
             ;;
+        --linear-sizes)
+            LINEAR_SIZES="$2"
+            shift 2
+            ;;
         --no-warmup)
             NO_WARMUP=true
             shift
@@ -49,7 +55,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help)
-            head -n 14 "$0" | tail -n 13
+            head -n 15 "$0" | tail -n 14
             exit 0
             ;;
         *)
@@ -129,6 +135,11 @@ echo "========================================================================"
 echo "GPUs: $NUM_GPUS"
 echo "Random seed: $RANDOM_SEED"
 echo "Repetitions per config: $REPEAT_COUNT"
+if [ -n "$LINEAR_SIZES" ]; then
+    echo "Message sizes: $LINEAR_SIZES linearly-spaced"
+else
+    echo "Message sizes: 31 power-of-2 sizes"
+fi
 echo "Output directory: $OUTPUT_DIR"
 echo "Locked clocks: $LOCK_CLOCKS"
 echo "No warmup: $NO_WARMUP"
@@ -173,6 +184,7 @@ torchrun \
     --output-dir="$OUTPUT_DIR" \
     --seed=$RANDOM_SEED \
     --repeat=$REPEAT_COUNT \
+    $([ -n "$LINEAR_SIZES" ] && echo "--linear-sizes=$LINEAR_SIZES") \
     $([ "$NO_WARMUP" = true ] && echo "--no-warmup")
 
 RETVAL=$?

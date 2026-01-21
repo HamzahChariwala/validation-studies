@@ -3,6 +3,7 @@ Configuration for point-to-point communication profiling experiments.
 Defines message sizes, GPU pairs, and profiling parameters.
 """
 
+import numpy as np
 from typing import List, Dict, Any
 
 
@@ -19,8 +20,31 @@ MEDIUM_SIZES = [2**i for i in range(11, 20)]  # 2048, 4096, ..., 262144, 524288
 # Large messages: 1MB to 1GB (bandwidth-bound)
 LARGE_SIZES = [2**i for i in range(20, 31)]  # 1048576, ..., 536870912, 1073741824
 
-# All message sizes (31 total)
+# All message sizes (31 total, powers of 2)
 MESSAGE_SIZES = SMALL_SIZES + MEDIUM_SIZES + LARGE_SIZES
+
+# Min and max message sizes for linear sampling mode
+MIN_MESSAGE_SIZE = 1  # 1 byte
+MAX_MESSAGE_SIZE = 1073741824  # 1 GB
+
+
+def generate_linear_message_sizes(num_sizes: int = 50) -> List[int]:
+    """
+    Generate uniformly-spaced message sizes in linear space.
+    
+    This provides better data for linear regression compared to log-spaced sizes.
+    
+    Args:
+        num_sizes: Number of message sizes to generate
+        
+    Returns:
+        List of message sizes in bytes, sorted in ascending order
+    """
+    sizes = np.linspace(MIN_MESSAGE_SIZE, MAX_MESSAGE_SIZE, num_sizes, dtype=np.int64)
+    # Ensure sizes are unique and sorted
+    sizes = sorted(set(sizes.tolist()))
+    return sizes
+
 
 # ============================================================================
 # PROFILING PARAMETERS

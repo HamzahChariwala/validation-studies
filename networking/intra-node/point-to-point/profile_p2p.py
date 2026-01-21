@@ -28,6 +28,7 @@ from p2p_config import (
     OUTPUT_DIR as DEFAULT_OUTPUT_DIR,
     generate_all_configs,
     get_config_summary,
+    generate_linear_message_sizes,
 )
 
 # Import utilities from networking.utils
@@ -51,7 +52,10 @@ from networking.utils import (
 
 def create_buffer_pool(message_sizes, dtype=torch.float32, device='cuda'):
     """
-    Pre-allocate all communication buffers.
+    Pre-allocate communication buffers efficiently.
+    
+    Strategy: Allocate only the largest buffer and reuse it (or slices) for smaller messages.
+    This prevents OOM errors when using many message sizes with linear sampling.
     
     Args:
         message_sizes: List of message sizes in bytes
@@ -66,13 +70,23 @@ def create_buffer_pool(message_sizes, dtype=torch.float32, device='cuda'):
     bytes_per_element = torch.finfo(dtype).bits // 8 if dtype.is_floating_point else dtype.itemsize
     buffer_pool = {}
     
+    # Allocate the largest buffer first
+    max_size = max(message_sizes)
+    max_elements = max_size // bytes_per_element
+    print_once(f"  Allocating max buffer: {max_size / (1024**3):.2f} GB ({max_elements} elements)")
+    max_buffer = torch.randn(max_elements, dtype=dtype, device=device)
+    
+    # For all sizes, use slices of the max buffer
     for size in message_sizes:
         num_elements = size // bytes_per_element
-        # Random non-zero data (prevents hardware sparse optimizations)
-        buffer = torch.randn(num_elements, dtype=dtype, device=device)
-        buffer_pool[size] = buffer
+        if num_elements > 0:
+            # Use a slice of the max buffer (shares memory, no additional allocation)
+            buffer_pool[size] = max_buffer[:num_elements].contiguous()
+        else:
+            # For very small messages (< 1 element), use a 1-element buffer
+            buffer_pool[size] = max_buffer[:1].contiguous()
     
-    print_once(f"Buffer pool allocated successfully")
+    print_once(f"Buffer pool allocated successfully (using {max_size / (1024**3):.2f} GB)")
     return buffer_pool
 
 
@@ -120,6 +134,8 @@ def main():
                         help='Random seed for config ordering')
     parser.add_argument('--repeat', type=int, default=DEFAULT_REPEAT_COUNT,
                         help='Number of repetitions per config (default: 10)')
+    parser.add_argument('--linear-sizes', type=int, default=None,
+                        help='Use N linearly-spaced message sizes instead of powers of 2 (default: None, uses 31 power-of-2 sizes). Recommended: 50 for better linear regression.')
     parser.add_argument('--no-warmup', action='store_true',
                         help='Skip thermal warmup and warmup iterations (faster for testing)')
     args = parser.parse_args()
@@ -128,6 +144,13 @@ def main():
     RANDOM_SEED = args.seed
     REPEAT_COUNT = args.repeat
     SKIP_WARMUP = args.no_warmup
+    
+    # Override MESSAGE_SIZES if linear sampling is requested
+    if args.linear_sizes is not None:
+        MESSAGE_SIZES = generate_linear_message_sizes(args.linear_sizes)
+        print(f"Using {len(MESSAGE_SIZES)} linearly-spaced message sizes ({MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)")
+    else:
+        print(f"Using {len(MESSAGE_SIZES)} power-of-2 message sizes ({MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)")
     
     # ========================================================================
     # 1. INITIALIZATION
