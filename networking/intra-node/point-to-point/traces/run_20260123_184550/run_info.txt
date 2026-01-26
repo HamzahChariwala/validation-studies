@@ -1,0 +1,20 @@
+================================================================================
+POINT-TO-POINT COMMUNICATION PROFILING - RUN INFO
+================================================================================
+
+Timestamp: 2026-01-23T18:45:52.928891
+Output Directory: ./traces/run_20260123_184550
+
+Configuration:
+  GPUs (world size): 4
+  Random seed: 811
+  Message sizes: 20 (from 1 to 1073741824 bytes)
+  Warmup iterations: 5 (enabled)
+  Repeat count: 50
+  Execution mode: SEQUENTIAL
+  Serialization: STRICT
+  Lock clocks: YES
+  Thermal warmup: 60s to 55°C (enabled)
+  Drift measurement: 30s
+
+================================================================================
