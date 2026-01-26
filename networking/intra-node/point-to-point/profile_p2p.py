@@ -110,6 +110,60 @@ def run_p2p_test(rank, config, buffer_pool):
     # Other ranks idle
 
 
+def lock_gpu_clocks(world_size):
+    """Lock GPU clocks to maximum frequency (requires sudo)."""
+    import subprocess
+    
+    print_once("\nLocking GPU clocks to maximum frequency...")
+    print_once("  (This requires sudo access)")
+    
+    for gpu_id in range(world_size):
+        try:
+            # Enable persistence mode
+            subprocess.run(
+                ['sudo', 'nvidia-smi', '-i', str(gpu_id), '-pm', '1'],
+                check=False, capture_output=True
+            )
+            
+            # Get max clock speed
+            result = subprocess.run(
+                ['nvidia-smi', '-i', str(gpu_id), '--query-gpu=clocks.max.graphics', '--format=csv,noheader,nounits'],
+                check=True, capture_output=True, text=True
+            )
+            max_clock = result.stdout.strip()
+            
+            # Lock to max clock
+            subprocess.run(
+                ['sudo', 'nvidia-smi', '-i', str(gpu_id), '-lgc', max_clock],
+                check=False, capture_output=True
+            )
+            
+            print_once(f"  ✓ GPU {gpu_id} locked to {max_clock} MHz")
+            
+        except Exception as e:
+            print_once(f"  ⚠ Warning: Could not lock GPU {gpu_id} clocks: {e}")
+    
+    print_once("GPU clocks locked\n")
+
+
+def unlock_gpu_clocks(world_size):
+    """Unlock GPU clocks (reset to default)."""
+    import subprocess
+    
+    print_once("\nUnlocking GPU clocks...")
+    
+    for gpu_id in range(world_size):
+        try:
+            subprocess.run(
+                ['sudo', 'nvidia-smi', '-i', str(gpu_id), '-rgc'],
+                check=False, capture_output=True
+            )
+        except:
+            pass
+    
+    print_once("GPU clocks unlocked\n")
+
+
 def save_execution_log(execution_log, output_path):
     """Save execution log to CSV."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -128,8 +182,8 @@ def main():
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Profile point-to-point GPU communication')
-    parser.add_argument('--output-dir', type=str, default=DEFAULT_OUTPUT_DIR,
-                        help='Output directory for traces and logs')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Output directory for traces and logs (default: creates timestamped subdirectory in ./traces/)')
     parser.add_argument('--seed', type=int, default=DEFAULT_RANDOM_SEED,
                         help='Random seed for config ordering')
     parser.add_argument('--repeat', type=int, default=DEFAULT_REPEAT_COUNT,
@@ -138,19 +192,34 @@ def main():
                         help='Use N linearly-spaced message sizes instead of powers of 2 (default: None, uses 31 power-of-2 sizes). Recommended: 50 for better linear regression.')
     parser.add_argument('--no-warmup', action='store_true',
                         help='Skip thermal warmup and warmup iterations (faster for testing)')
+    parser.add_argument('--round-robin', action='store_true',
+                        help='Execute in round-robin fashion (all configs rep 0, then all configs rep 1, etc.). Default: execute all reps of one config before moving to next.')
+    parser.add_argument('--lock-clocks', action='store_true',
+                        help='Lock GPU clocks to max frequency (requires sudo, only works on rank 0)')
+    parser.add_argument('--strict-serial', action='store_true',
+                        help='Strictly serialize execution: barrier + CUDA sync after every config (prevents any kernel overlap)')
     args = parser.parse_args()
     
-    OUTPUT_DIR = args.output_dir
+    # Create timestamped output directory if not specified
+    if args.output_dir is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        OUTPUT_DIR = os.path.join(DEFAULT_OUTPUT_DIR, f'run_{timestamp}')
+    else:
+        OUTPUT_DIR = args.output_dir
     RANDOM_SEED = args.seed
     REPEAT_COUNT = args.repeat
     SKIP_WARMUP = args.no_warmup
+    ROUND_ROBIN = args.round_robin
+    LOCK_CLOCKS = args.lock_clocks
+    STRICT_SERIAL = args.strict_serial
     
     # Override MESSAGE_SIZES if linear sampling is requested
     if args.linear_sizes is not None:
-        MESSAGE_SIZES = generate_linear_message_sizes(args.linear_sizes)
-        print(f"Using {len(MESSAGE_SIZES)} linearly-spaced message sizes ({MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)")
+        message_sizes = generate_linear_message_sizes(args.linear_sizes)
+        print(f"Using {len(message_sizes)} linearly-spaced message sizes ({message_sizes[0]} to {message_sizes[-1]} bytes)")
     else:
-        print(f"Using {len(MESSAGE_SIZES)} power-of-2 message sizes ({MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)")
+        message_sizes = MESSAGE_SIZES
+        print(f"Using {len(message_sizes)} power-of-2 message sizes ({message_sizes[0]} to {message_sizes[-1]} bytes)")
     
     # ========================================================================
     # 1. INITIALIZATION
@@ -160,9 +229,18 @@ def main():
     print_once("POINT-TO-POINT COMMUNICATION PROFILING")
     print_once("=" * 80)
     
+    # Set NCCL environment variables for better debugging
+    os.environ.setdefault('NCCL_DEBUG', 'INFO')
+    os.environ.setdefault('NCCL_DEBUG_SUBSYS', 'INIT,COLL')
+    
     # Initialize distributed
     rank, world_size = init_distributed(backend='nccl')
     print(f"Rank {rank}/{world_size} initialized")
+    
+    # Lock GPU clocks if requested (only rank 0 does this)
+    if LOCK_CLOCKS and rank == 0:
+        lock_gpu_clocks(world_size)
+    barrier_all()
     
     # Set random seed for reproducibility
     random.seed(RANDOM_SEED)
@@ -184,10 +262,13 @@ def main():
             f.write("Configuration:\n")
             f.write(f"  GPUs (world size): {world_size}\n")
             f.write(f"  Random seed: {RANDOM_SEED}\n")
-            f.write(f"  Message sizes: {len(MESSAGE_SIZES)} (from {MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)\n")
-            f.write(f"  Warmup iterations: {WARMUP_ITERATIONS}\n")
+            f.write(f"  Message sizes: {len(message_sizes)} (from {message_sizes[0]} to {message_sizes[-1]} bytes)\n")
+            f.write(f"  Warmup iterations: {WARMUP_ITERATIONS if not SKIP_WARMUP else 0} ({'skipped' if SKIP_WARMUP else 'enabled'})\n")
             f.write(f"  Repeat count: {REPEAT_COUNT}\n")
-            f.write(f"  Thermal warmup: {THERMAL_WARMUP_DURATION}s to {THERMAL_TARGET_TEMP}°C\n")
+            f.write(f"  Execution mode: {'ROUND-ROBIN' if ROUND_ROBIN else 'SEQUENTIAL'}\n")
+            f.write(f"  Serialization: {'STRICT' if STRICT_SERIAL else 'RELAXED'}\n")
+            f.write(f"  Lock clocks: {'YES' if LOCK_CLOCKS else 'NO'}\n")
+            f.write(f"  Thermal warmup: {THERMAL_WARMUP_DURATION if not SKIP_WARMUP else 0}s to {THERMAL_TARGET_TEMP}°C ({'skipped' if SKIP_WARMUP else 'enabled'})\n")
             f.write(f"  Drift measurement: {DRIFT_MEASUREMENT_DURATION}s\n\n")
             f.write("=" * 80 + "\n")
     
@@ -238,7 +319,7 @@ def main():
     # ========================================================================
     
     print_once(f"\nGenerating configurations...")
-    configs = generate_all_configs(world_size, MESSAGE_SIZES)
+    configs = generate_all_configs(world_size, message_sizes)
     
     # Shuffle for pseudo-random ordering
     random.shuffle(configs)
@@ -248,7 +329,7 @@ def main():
         config['config_id'] = i
     
     print_once(f"Total configurations: {len(configs)}")
-    print_once(f"Message sizes: {len(MESSAGE_SIZES)} ({MESSAGE_SIZES[0]} to {MESSAGE_SIZES[-1]} bytes)")
+    print_once(f"Message sizes: {len(message_sizes)} ({message_sizes[0]} to {message_sizes[-1]} bytes)")
     print_once(f"GPU pairs: {world_size * (world_size - 1)} (both directions)")
     
     # ========================================================================
@@ -256,7 +337,7 @@ def main():
     # ========================================================================
     
     print_once(f"\nAllocating communication buffers...")
-    buffer_pool = create_buffer_pool(MESSAGE_SIZES, dtype=BUFFER_DTYPE, device=f'cuda:{rank}')
+    buffer_pool = create_buffer_pool(message_sizes, dtype=BUFFER_DTYPE, device=f'cuda:{rank}')
     
     # ========================================================================
     # 7. WARMUP PHASE (No profiling)
@@ -288,6 +369,16 @@ def main():
     print_once(f"Repetitions: {REPEAT_COUNT}")
     print_once(f"Total profiled operations: {len(configs) * REPEAT_COUNT}")
     
+    if ROUND_ROBIN:
+        print_once(f"Execution mode: ROUND-ROBIN (all configs rep 0, then all configs rep 1, ...)")
+    else:
+        print_once(f"Execution mode: SEQUENTIAL (all reps of config 0, then all reps of config 1, ...)")
+    
+    if STRICT_SERIAL:
+        print_once(f"Serialization: STRICT (barrier + CUDA sync after every config to prevent kernel overlap)")
+    else:
+        print_once(f"Serialization: RELAXED (synchronize only after repetitions/configs)")
+    
     # Configure profiler schedule
     # Set repeat to match total number of step() calls (once per config per repetition)
     total_steps = len(configs) * REPEAT_COUNT
@@ -312,48 +403,105 @@ def main():
         with_stack=False,
     ) as prof:
         
-        for rep in range(REPEAT_COUNT):
-            if rank == 0:
-                print(f"\nRepetition {rep+1}/{REPEAT_COUNT}")
-            
-            for i, config in enumerate(configs):
-                if rank == 0 and i % 100 == 0 and i > 0:
-                    print(f"  Progress: {i}/{len(configs)} configs...")
-                
-                # Create profiler annotation name
-                name = (f"p2p_cfg{config['config_id']:04d}_"
-                        f"s{config['src']}d{config['dst']}_"
-                        f"sz{config['size']}_"
-                        f"r{rep}")
-                
-                # Record start time (for execution log)
-                start_time = time.perf_counter_ns()
-                
-                # Execute with profiler annotation
-                with torch.profiler.record_function(name):
-                    run_p2p_test(rank, config, buffer_pool)
-                
-                # Record end time
-                end_time = time.perf_counter_ns()
-                
-                # Log execution (rank 0 only)
+        if ROUND_ROBIN:
+            # Round-robin: for each repetition, run all configs
+            for rep in range(REPEAT_COUNT):
                 if rank == 0:
-                    execution_log.append({
-                        'config_id': config['config_id'],
-                        'src': config['src'],
-                        'dst': config['dst'],
-                        'size': config['size'],
-                        'repetition': rep,
-                        'timestamp_start_ns': start_time,
-                        'timestamp_end_ns': end_time,
-                        'duration_ns': end_time - start_time,
-                    })
+                    print(f"\nRepetition {rep+1}/{REPEAT_COUNT}")
                 
-                # Step profiler after each config
-                prof.step()
-            
-            # Synchronize after each repetition
-            torch.cuda.synchronize()
+                for i, config in enumerate(configs):
+                    if rank == 0 and i % 100 == 0 and i > 0:
+                        print(f"  Progress: {i}/{len(configs)} configs...")
+                    
+                    # Create profiler annotation name
+                    name = (f"p2p_cfg{config['config_id']:04d}_"
+                            f"s{config['src']}d{config['dst']}_"
+                            f"sz{config['size']}_"
+                            f"r{rep}")
+                    
+                    # Record start time (for execution log)
+                    start_time = time.perf_counter_ns()
+                    
+                    # Execute with profiler annotation
+                    with torch.profiler.record_function(name):
+                        run_p2p_test(rank, config, buffer_pool)
+                    
+                    # Record end time
+                    end_time = time.perf_counter_ns()
+                    
+                    # Log execution (rank 0 only)
+                    if rank == 0:
+                        execution_log.append({
+                            'config_id': config['config_id'],
+                            'src': config['src'],
+                            'dst': config['dst'],
+                            'size': config['size'],
+                            'repetition': rep,
+                            'timestamp_start_ns': start_time,
+                            'timestamp_end_ns': end_time,
+                            'duration_ns': end_time - start_time,
+                        })
+                
+                    # Step profiler after each config
+                    prof.step()
+                    
+                    # Strict serialization: ensure no kernel overlap
+                    if STRICT_SERIAL:
+                        torch.cuda.synchronize()
+                        barrier_all()
+                
+                # Synchronize after each repetition
+                torch.cuda.synchronize()
+        
+        else:
+            # Sequential: for each config, run all repetitions
+            for i, config in enumerate(configs):
+                if rank == 0 and i % 50 == 0:
+                    print(f"\nConfig {i+1}/{len(configs)}")
+                
+                for rep in range(REPEAT_COUNT):
+                    if rank == 0 and i % 50 == 0 and rep % 10 == 0:
+                        print(f"  Repetition {rep+1}/{REPEAT_COUNT}")
+                    
+                    # Create profiler annotation name
+                    name = (f"p2p_cfg{config['config_id']:04d}_"
+                            f"s{config['src']}d{config['dst']}_"
+                            f"sz{config['size']}_"
+                            f"r{rep}")
+                    
+                    # Record start time (for execution log)
+                    start_time = time.perf_counter_ns()
+                    
+                    # Execute with profiler annotation
+                    with torch.profiler.record_function(name):
+                        run_p2p_test(rank, config, buffer_pool)
+                    
+                    # Record end time
+                    end_time = time.perf_counter_ns()
+                    
+                    # Log execution (rank 0 only)
+                    if rank == 0:
+                        execution_log.append({
+                            'config_id': config['config_id'],
+                            'src': config['src'],
+                            'dst': config['dst'],
+                            'size': config['size'],
+                            'repetition': rep,
+                            'timestamp_start_ns': start_time,
+                            'timestamp_end_ns': end_time,
+                            'duration_ns': end_time - start_time,
+                        })
+                
+                    # Step profiler after each config
+                    prof.step()
+                    
+                    # Strict serialization: ensure no kernel overlap
+                    if STRICT_SERIAL:
+                        torch.cuda.synchronize()
+                        barrier_all()
+                
+                # Synchronize after each config completes all reps
+                torch.cuda.synchronize()
     
     print_once("Profiled execution complete")
     
@@ -444,6 +592,11 @@ def main():
         print_once(f"  - temperatures.csv (temperature/power/clock time-series)")
     
     print_once("=" * 80)
+    
+    # Unlock GPU clocks if we locked them (only rank 0 does this)
+    if LOCK_CLOCKS and rank == 0:
+        unlock_gpu_clocks(world_size)
+    barrier_all()
     
     cleanup_distributed()
 

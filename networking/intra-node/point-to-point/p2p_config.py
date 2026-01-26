@@ -69,7 +69,7 @@ BUFFER_DTYPE = torch.float32
 
 # Initial thermal warmup
 THERMAL_WARMUP_DURATION = 60  # seconds
-THERMAL_TARGET_TEMP = 50      # Celsius
+THERMAL_TARGET_TEMP = 55      # Celsius
 
 # Temperature monitoring
 TEMP_MONITOR_INTERVAL = 1.0   # seconds
