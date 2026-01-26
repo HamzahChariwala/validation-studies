@@ -15,7 +15,51 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 from scipy import stats
+from scipy.optimize import curve_fit
 import argparse
+
+
+def linear_model(x, slope, intercept):
+    """Linear model for curve fitting."""
+    return slope * x + intercept
+
+
+def constrained_linear_regression(x, y):
+    """
+    Perform linear regression with constraint that intercept > 0.
+    
+    Returns: slope, intercept, r_squared
+    """
+    # Use curve_fit with bounds to enforce intercept > 0
+    # Initial guess using unconstrained regression
+    result = stats.linregress(x, y)
+    
+    # Ensure initial guess is within bounds
+    p0 = [max(1e-10, result.slope), max(0.01, result.intercept, np.min(y))]
+    
+    # Bounds: slope must be positive, intercept must be > 0.001
+    bounds = ([1e-10, 0.001], [np.inf, np.inf])
+    
+    try:
+        popt, _ = curve_fit(linear_model, x, y, p0=p0, bounds=bounds, maxfev=10000)
+        slope, intercept = popt
+        
+        # Calculate R²
+        y_pred = linear_model(x, slope, intercept)
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        return slope, intercept, r_squared
+    except Exception as e:
+        # Fallback to unconstrained if fitting fails
+        print(f"Warning: Constrained fit failed, using unconstrained: {e}")
+        result = stats.linregress(x, y)
+        slope, intercept = result.slope, result.intercept
+        # Force intercept to be positive
+        if intercept <= 0:
+            intercept = 0.001
+        return slope, intercept, result.rvalue ** 2
 
 
 def load_execution_log(csv_path, outlier_threshold_us=None):
@@ -49,30 +93,41 @@ def load_execution_log(csv_path, outlier_threshold_us=None):
 
 def plot_duration_vs_size_log(df, output_path, outliers_removed=0):
     """Plot duration vs message size with log2 x-axis."""
-    plt.figure(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 8))
     
     # Group by src-dst pair
     pairs = df.groupby(['src', 'dst'])
     
     # Use magma colormap
-    colors = plt.cm.magma(np.linspace(0.2, 0.9, len(pairs)))
+    colors = plt.cm.magma(np.linspace(0.1, 0.9, len(pairs)))
     
     for idx, ((src, dst), group) in enumerate(pairs):
         label = f"GPU {src} → GPU {dst}"
-        plt.plot(group['size'], group['duration_us'], 
-                marker='o', alpha=0.6, label=label, markersize=4, color=colors[idx])
+        
+        # Plot all individual points with translucency
+        ax.scatter(group['size'], group['duration_us'],
+                  color=colors[idx], alpha=0.3, s=20, edgecolors='none')
+        
+        # Group by size and calculate mean for the line
+        size_mean = group.groupby('size')['duration_us'].mean()
+        
+        # Plot line connecting only the averages
+        ax.plot(size_mean.index, size_mean.values,
+               label=label, color=colors[idx], alpha=0.9, 
+               linewidth=2.5, marker='o', markersize=6)
     
-    plt.xscale('log', base=2)
-    plt.xlabel('Message Size (bytes)', fontsize=12)
-    plt.ylabel('Duration (μs)', fontsize=12)
+    ax.set_xscale('log', base=2)
+    ax.set_yscale('log', base=10)
+    ax.set_xlabel('Message Size (bytes)', fontsize=12)
+    ax.set_ylabel('Duration (μs)', fontsize=12)
     
     title = 'Point-to-Point Communication Duration vs Message Size (Log Scale)'
     if outliers_removed > 0:
         title += f'\n(Outliers removed: {outliers_removed})'
-    plt.title(title, fontsize=14)
+    ax.set_title(title, fontsize=14)
     
-    plt.grid(True, alpha=0.3)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True, alpha=0.3)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -101,9 +156,9 @@ def plot_duration_vs_size_linear_with_regression(df, output_path, outliers_remov
         ax.scatter(group['size'], group['duration_us'], 
                   alpha=0.4, s=30, color=color, label=f"{label} (data)")
         
-        # Perform linear regression
-        slope, intercept, r_value, p_value, std_err = stats.linregress(
-            group['size'], group['duration_us']
+        # Perform linear regression with constraint: intercept > 0
+        slope, intercept, r_squared = constrained_linear_regression(
+            group['size'].values, group['duration_us'].values
         )
         
         # Generate regression line
@@ -112,7 +167,7 @@ def plot_duration_vs_size_linear_with_regression(df, output_path, outliers_remov
         
         # Plot regression line
         ax.plot(x_line, y_line, '--', color=color, linewidth=2, 
-               label=f"{label} (fit: y={slope:.2e}x + {intercept:.2f}, R²={r_value**2:.4f})")
+               label=f"{label} (fit: y={slope:.2e}x + {intercept:.2f}, R²={r_squared:.4f})")
         
         # Store results
         regression_results.append({
@@ -120,8 +175,7 @@ def plot_duration_vs_size_linear_with_regression(df, output_path, outliers_remov
             'dst': dst,
             'slope': slope,
             'intercept': intercept,
-            'r_squared': r_value**2,
-            'p_value': p_value
+            'r_squared': r_squared
         })
     
     ax.set_xlabel('Message Size (bytes)', fontsize=12)
@@ -160,33 +214,49 @@ def plot_latency_heatmap(regression_results, output_path, outliers_removed=0):
     all_gpus = sorted(set([r['src'] for r in regression_results] + 
                           [r['dst'] for r in regression_results]))
     
-    # Create matrix
-    latency_matrix = np.zeros((len(all_gpus), len(all_gpus)))
-    latency_matrix[:] = np.nan  # Initialize with NaN
+    # Create matrix with NaN for diagonal (src == dst)
+    latency_matrix = np.full((len(all_gpus), len(all_gpus)), np.nan)
     
     for result in regression_results:
         src_idx = all_gpus.index(result['src'])
         dst_idx = all_gpus.index(result['dst'])
-        latency_matrix[src_idx, dst_idx] = result['intercept']
+        # Only fill if src != dst
+        if result['src'] != result['dst']:
+            latency_matrix[src_idx, dst_idx] = result['intercept']
     
     # Plot
-    plt.figure(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Create annotation array that shows empty strings for NaN, formatted to 3 decimal places
+    mask = np.isnan(latency_matrix)
+    annot_formatted = np.where(mask, '', 
+                               [[f'{val:.3f}' if not np.isnan(val) else '' 
+                                 for val in row] for row in latency_matrix])
+    
     sns.heatmap(latency_matrix, 
-                annot=True, 
-                fmt='.2f',
-                cmap='magma_r',
+                annot=annot_formatted,
+                fmt='',
+                cmap='magma',
                 xticklabels=[f"GPU {i}" for i in all_gpus],
                 yticklabels=[f"GPU {i}" for i in all_gpus],
-                cbar_kws={'label': 'Latency Proxy (μs)\n(y-intercept)'},
-                square=True)
+                cbar_kws={'label': 'Latency (μs, y-intercept)'},
+                square=True,
+                ax=ax)
     
-    plt.xlabel('Destination GPU', fontsize=12)
-    plt.ylabel('Source GPU', fontsize=12)
+    # Add cross-hatching to diagonal cells
+    for i in range(len(all_gpus)):
+        ax.add_patch(plt.Rectangle((i, i), 1, 1,
+                                  fill=True, facecolor='lightgray',
+                                  edgecolor='black', linewidth=1.5,
+                                  hatch='///', zorder=10))
+    
+    ax.set_xlabel('Destination GPU', fontsize=12)
+    ax.set_ylabel('Source GPU', fontsize=12)
     
     title = 'Communication Latency Heatmap\n(Y-intercept from linear regression)'
     if outliers_removed > 0:
         title += f'\n[Outliers removed: {outliers_removed}]'
-    plt.title(title, fontsize=14)
+    ax.set_title(title, fontsize=14)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -201,40 +271,56 @@ def plot_bandwidth_heatmap(regression_results, output_path, outliers_removed=0):
     all_gpus = sorted(set([r['src'] for r in regression_results] + 
                           [r['dst'] for r in regression_results]))
     
-    # Create matrix
-    slope_matrix = np.zeros((len(all_gpus), len(all_gpus)))
-    slope_matrix[:] = np.nan  # Initialize with NaN
+    # Create matrix with NaN for diagonal (src == dst)
+    slope_matrix = np.full((len(all_gpus), len(all_gpus)), np.nan)
     
     for result in regression_results:
         src_idx = all_gpus.index(result['src'])
         dst_idx = all_gpus.index(result['dst'])
-        # Slope is in μs/byte
-        # Convert to GB/s:
-        #   1/slope = byte/μs
-        #   byte/μs × 10^6 = byte/s (convert μs to s)
-        #   byte/s / 10^9 = GB/s (convert byte to GB)
-        #   Result: bandwidth = (1/slope) × 10^-3
-        bandwidth_gbps = (1.0 / result['slope']) * 1e-3  # GB/s
-        slope_matrix[src_idx, dst_idx] = bandwidth_gbps
+        # Only fill if src != dst
+        if result['src'] != result['dst']:
+            # Slope is in μs/byte
+            # Convert to GB/s:
+            #   1/slope = byte/μs
+            #   byte/μs × 10^6 = byte/s (convert μs to s)
+            #   byte/s / 10^9 = GB/s (convert byte to GB)
+            #   Result: bandwidth = (1/slope) × 10^-3
+            bandwidth_gbps = (1.0 / result['slope']) * 1e-3  # byte/μs to GB/s
+            slope_matrix[src_idx, dst_idx] = bandwidth_gbps
     
     # Plot
-    plt.figure(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Create annotation array that shows empty strings for NaN, formatted to 3 decimal places
+    mask = np.isnan(slope_matrix)
+    annot_formatted = np.where(mask, '', 
+                               [[f'{val:.3f}' if not np.isnan(val) else '' 
+                                 for val in row] for row in slope_matrix])
+    
     sns.heatmap(slope_matrix, 
-                annot=True, 
-                fmt='.2f',
+                annot=annot_formatted,
+                fmt='',
                 cmap='magma',
                 xticklabels=[f"GPU {i}" for i in all_gpus],
                 yticklabels=[f"GPU {i}" for i in all_gpus],
-                cbar_kws={'label': 'Effective Bandwidth (GB/s)\n(1/slope)'},
-                square=True)
+                cbar_kws={'label': 'Bandwidth (GB/s)'},
+                square=True,
+                ax=ax)
     
-    plt.xlabel('Destination GPU', fontsize=12)
-    plt.ylabel('Source GPU', fontsize=12)
+    # Add cross-hatching to diagonal cells
+    for i in range(len(all_gpus)):
+        ax.add_patch(plt.Rectangle((i, i), 1, 1,
+                                  fill=True, facecolor='lightgray',
+                                  edgecolor='black', linewidth=1.5,
+                                  hatch='///', zorder=10))
+    
+    ax.set_xlabel('Destination GPU', fontsize=12)
+    ax.set_ylabel('Source GPU', fontsize=12)
     
     title = 'Communication Bandwidth Heatmap\n(Derived from linear regression slope)'
     if outliers_removed > 0:
         title += f'\n[Outliers removed: {outliers_removed}]'
-    plt.title(title, fontsize=14)
+    ax.set_title(title, fontsize=14)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -270,10 +356,10 @@ def plot_individual_gpu_pairs(df, output_dir, duration_threshold_us=10000):
         removed_count = original_count - len(group_filtered)
         total_removed += removed_count
         
-        # Perform linear regression first to calculate residuals
+        # Perform linear regression first to calculate residuals (with constraint: intercept > 0)
         if len(group_filtered) > 1:
-            slope, intercept, r_value, p_value, std_err = stats.linregress(
-                group_filtered['size'], group_filtered['duration_us']
+            slope, intercept, r_squared = constrained_linear_regression(
+                group_filtered['size'].values, group_filtered['duration_us'].values
             )
             
             # Calculate predicted values and residuals
@@ -340,8 +426,7 @@ def plot_individual_gpu_pairs(df, output_dir, duration_threshold_us=10000):
             
             # Add regression statistics
             reg_text = (f'y = {slope:.2e}x + {intercept:.2f}\n'
-                       f'R² = {r_value**2:.6f}\n'
-                       f'p = {p_value:.2e}\n'
+                       f'R² = {r_squared:.6f}\n'
                        f'Max residual: {group_filtered["abs_residual"].max():.2f} μs')
             ax2.text(0.98, 0.02, reg_text, transform=ax2.transAxes, 
                     fontsize=9, verticalalignment='bottom', horizontalalignment='right',
