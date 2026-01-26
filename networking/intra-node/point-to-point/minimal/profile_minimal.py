@@ -154,7 +154,7 @@ def get_pcie_info_per_gpu(num_gpus: int) -> List[Dict[str, Any]]:
                     if 'PCIe Generation' in stripped:
                         in_pcie_generation = True
                         in_link_width = False
-                        continue
+Hamzahitu                        continue
                     
                     # Link Width subsection
                     if 'Link Width' in stripped and 'PCIe' not in stripped:
