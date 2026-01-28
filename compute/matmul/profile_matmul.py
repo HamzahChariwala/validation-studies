@@ -29,11 +29,23 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
         'bf16': torch.bfloat16,
         'int8': torch.int8,
     }
-    return dtype_map[dtype_str]
+    
+    # Check for new precision types (may not be supported in all PyTorch versions)
+    if dtype_str == 'int4' and hasattr(torch, 'int4'):
+        return torch.int4
+    elif dtype_str == 'fp8_e4m3' and hasattr(torch, 'float8_e4m3fn'):
+        return torch.float8_e4m3fn
+    elif dtype_str == 'fp8_e5m2' and hasattr(torch, 'float8_e5m2'):
+        return torch.float8_e5m2
+    elif dtype_str in dtype_map:
+        return dtype_map[dtype_str]
+    else:
+        raise ValueError(f"Unsupported or unavailable dtype: {dtype_str}")
 
 
 def is_dtype_supported(dtype_str: str, device: str) -> bool:
-    """Check if a dtype is supported on the given device."""
+    """Check if a dtype is supported on the given device for matmul operations."""
+    # Check bfloat16 support
     if dtype_str == 'bf16':
         if device == 'cuda':
             return torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -41,6 +53,47 @@ def is_dtype_supported(dtype_str: str, device: str) -> bool:
             return hasattr(torch, 'bfloat16')
         elif device == 'mps':
             return hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+    
+    # Check int8 support - torch.matmul does NOT support int8 natively
+    # Int8 matmul requires special kernels (e.g., torch.int_repr + quantized ops)
+    # For basic profiling, we skip int8 matmul
+    elif dtype_str == 'int8':
+        # Standard torch.matmul doesn't support int8, would need quantized API
+        return False
+    
+    # Check int4 support (typically requires special hardware/libraries)
+    elif dtype_str == 'int4':
+        return hasattr(torch, 'int4') and device == 'cuda'
+    
+    # Check FP8 support (requires newer GPUs like H100)
+    elif dtype_str in ['fp8_e4m3', 'fp8_e5m2']:
+        if device != 'cuda':
+            return False
+        if not torch.cuda.is_available():
+            return False
+        # Check if FP8 dtypes exist in PyTorch
+        if dtype_str == 'fp8_e4m3' and not hasattr(torch, 'float8_e4m3fn'):
+            return False
+        if dtype_str == 'fp8_e5m2' and not hasattr(torch, 'float8_e5m2'):
+            return False
+        # FP8 requires Hopper+ GPUs (compute capability 9.0+)
+        # T4 is 7.5, A100 is 8.0, H100 is 9.0
+        try:
+            capability = torch.cuda.get_device_capability()
+            if capability[0] < 9:
+                return False
+            # Additional check: try to create a small FP8 tensor
+            # Some systems may report wrong capability
+            try:
+                dtype = torch.float8_e4m3fn if dtype_str == 'fp8_e4m3' else torch.float8_e5m2
+                _ = torch.tensor([1.0], dtype=dtype, device='cuda')
+                return True
+            except:
+                return False
+        except:
+            return False
+    
+    # Standard floating point types (fp32, fp16) are generally supported everywhere
     return True
 
 
@@ -55,7 +108,8 @@ def create_tensors(
     """
     Generate random NON-ZERO tensors for matmul.
     
-    Uses torch.rand() + offset to ensure all values are non-zero.
+    For floating point types: Uses torch.rand() + offset to ensure non-zero values.
+    For integer types: Uses torch.randint() with range [1, 128] for non-zero values.
     This prevents hardware sparsity optimizations from affecting results.
     Seeding is handled globally via torch.manual_seed() for reproducibility.
     
@@ -70,12 +124,44 @@ def create_tensors(
     Returns:
         Tuple of (A, B) tensors ready for matmul
     """
-    if batch_size == 1:
-        A = torch.rand(m, k, dtype=dtype, device=device) + 0.1
-        B = torch.rand(k, n, dtype=dtype, device=device) + 0.1
+    # Check if dtype is an integer type
+    is_integer = dtype in [torch.int8, torch.int16, torch.int32, torch.int64]
+    if hasattr(torch, 'int4') and dtype == torch.int4:
+        is_integer = True
+    
+    # Check if dtype is an FP8 type (these need special handling)
+    is_fp8 = False
+    if hasattr(torch, 'float8_e4m3fn') and dtype == torch.float8_e4m3fn:
+        is_fp8 = True
+    if hasattr(torch, 'float8_e5m2') and dtype == torch.float8_e5m2:
+        is_fp8 = True
+    
+    if is_integer:
+        # For integer types, use randint with non-zero range
+        # Range [1, 128] provides good coverage while avoiding overflow in accumulation
+        if batch_size == 1:
+            A = torch.randint(1, 128, (m, k), dtype=dtype, device=device)
+            B = torch.randint(1, 128, (k, n), dtype=dtype, device=device)
+        else:
+            A = torch.randint(1, 128, (batch_size, m, k), dtype=dtype, device=device)
+            B = torch.randint(1, 128, (batch_size, k, n), dtype=dtype, device=device)
+    elif is_fp8:
+        # For FP8 types, create as float32 first, then convert
+        # FP8 types don't support rand() directly
+        if batch_size == 1:
+            A = (torch.rand(m, k, dtype=torch.float32, device=device) + 0.1).to(dtype)
+            B = (torch.rand(k, n, dtype=torch.float32, device=device) + 0.1).to(dtype)
+        else:
+            A = (torch.rand(batch_size, m, k, dtype=torch.float32, device=device) + 0.1).to(dtype)
+            B = (torch.rand(batch_size, k, n, dtype=torch.float32, device=device) + 0.1).to(dtype)
     else:
-        A = torch.rand(batch_size, m, k, dtype=dtype, device=device) + 0.1
-        B = torch.rand(batch_size, k, n, dtype=dtype, device=device) + 0.1
+        # For standard floating point types (fp32, fp16, bf16), use rand + offset
+        if batch_size == 1:
+            A = torch.rand(m, k, dtype=dtype, device=device) + 0.1
+            B = torch.rand(k, n, dtype=dtype, device=device) + 0.1
+        else:
+            A = torch.rand(batch_size, m, k, dtype=dtype, device=device) + 0.1
+            B = torch.rand(batch_size, k, n, dtype=dtype, device=device) + 0.1
     
     return A, B
 
@@ -93,6 +179,33 @@ def run_matmul(
         B = B.transpose(-2, -1)
     
     return torch.matmul(A, B)
+
+
+def validate_config(config: Dict[str, Any]) -> bool:
+    """
+    Validate that a configuration can actually create tensors and run matmul.
+    Returns True if valid, False if not.
+    """
+    try:
+        dtype = dtype_str_to_torch(config['dtype'])
+        device = config['device']
+        
+        # Try creating small test tensors
+        A_test, B_test = create_tensors(
+            m=2, n=2, k=2,
+            dtype=dtype,
+            batch_size=1,
+            device=device,
+        )
+        
+        # Try running matmul
+        with torch.no_grad():
+            _ = run_matmul(A_test, B_test, config['transpose_a'], config['transpose_b'])
+        
+        return True
+    except Exception as e:
+        # Config is not actually supported despite passing initial checks
+        return False
 
 
 def run_single_config(config: Dict[str, Any]) -> None:
@@ -136,13 +249,52 @@ def main():
         torch.cuda.manual_seed_all(RANDOM_SEED)
     
     configs = generate_experiment_configs()
-    print(f"Matmul Profiling: {len(configs)} configurations, {REPEAT_COUNT} repeats")
+    
+    # Filter configs by device availability and dtype support
+    device = configs[0]['device'] if configs else 'cpu'
+    
+    # Filter out unsupported dtypes (first pass - static checks)
+    original_count = len(configs)
+    configs = [c for c in configs if is_dtype_supported(c['dtype'], device)]
+    filtered_static = original_count - len(configs)
+    
+    if filtered_static > 0:
+        print(f"Note: Filtered out {filtered_static} configurations (static dtype checks)")
+    
+    # Validate actual tensor creation (second pass - runtime checks)
+    print("Validating remaining configurations with actual tensor creation...")
+    validated_configs = []
+    failed_dtypes = set()
+    
+    for config in configs:
+        if validate_config(config):
+            validated_configs.append(config)
+        else:
+            failed_dtypes.add(config['dtype'])
+    
+    filtered_runtime = len(configs) - len(validated_configs)
+    configs = validated_configs
+    
+    if filtered_runtime > 0:
+        print(f"Note: Filtered out {filtered_runtime} additional configurations (runtime validation failed)")
+        print(f"      Failed dtypes: {sorted(failed_dtypes)}")
+    
+    print(f"\nMatmul Profiling: {len(configs)} valid configurations, {REPEAT_COUNT} repeats")
     print(f"Output: {output_dir}\n")
+    
+    if len(configs) == 0:
+        print("ERROR: No valid configurations remaining after filtering!")
+        return
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # Filter configs by device availability
-    device = configs[0]['device'] if configs else 'cpu'
+    # Save the actual configs that will be run for database building
+    import json as json_lib
+    configs_file = os.path.join(output_dir, 'configs.json')
+    with open(configs_file, 'w') as f:
+        json_lib.dump(configs, f, indent=2)
+    print(f"Saved configuration list to: {configs_file}")
+    
     if device == 'cuda' and not torch.cuda.is_available():
         print("ERROR: CUDA not available but configs require it")
         return

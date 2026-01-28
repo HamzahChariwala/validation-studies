@@ -225,7 +225,7 @@ def extract_gpu_kernel_data(cpu_op_id: int, cpu_trace: Dict[str, Any],
             break
     
     if cpu_op is None:
-        return [], {'total_kernel_time': 0.0}
+        return [], {'total_kernel_time': None}
     
     # For aten::matmul, we need to find the child mm/bmm operation
     # aten::matmul internally calls aten::mm (2D) or aten::bmm (batched 3D)
@@ -291,18 +291,23 @@ def compute_statistics(repeats_data: List[Dict[str, Any]]) -> Dict[str, float]:
         repeats_data: List of repeat dictionaries with timing data
     
     Returns:
-        Dictionary with mean, std, min, max
+        Dictionary with mean, std, min, max (or None if no valid data)
     """
-    # Extract kernel times
-    kernel_times = [r['timing']['total_kernel_time'] for r in repeats_data 
-                   if 'timing' in r and 'total_kernel_time' in r['timing']]
+    # Extract kernel times, filtering out None values
+    kernel_times = [
+        r['timing']['total_kernel_time'] 
+        for r in repeats_data 
+        if 'timing' in r 
+        and 'total_kernel_time' in r['timing']
+        and r['timing']['total_kernel_time'] is not None
+    ]
     
     if not kernel_times:
         return {
-            'kernel_time_mean': 0.0,
-            'kernel_time_std': 0.0,
-            'kernel_time_min': 0.0,
-            'kernel_time_max': 0.0
+            'kernel_time_mean': None,
+            'kernel_time_std': None,
+            'kernel_time_min': None,
+            'kernel_time_max': None
         }
     
     return {
@@ -339,10 +344,21 @@ def build_database(trace_dir: Path, output_path: Path) -> Dict[str, Any]:
     print("MATMUL DATABASE BUILDER")
     print("=" * 80)
     
-    # Load configs in execution order
+    # Load configs - prefer saved configs from profiling run, fallback to regenerating
     print("\n[1/8] Loading configurations...")
-    configs = generate_experiment_configs()
-    print(f"      Loaded {len(configs)} configurations")
+    configs_file = trace_dir / 'configs.json'
+    
+    if configs_file.exists():
+        print(f"      Loading configs from: {configs_file.name}")
+        with open(configs_file, 'r') as f:
+            configs = json.load(f)
+        print(f"      ✓ Loaded {len(configs)} configurations from saved file")
+    else:
+        print(f"      No configs.json found, regenerating from matmul_config.py")
+        print(f"      ⚠ Warning: Regenerated configs may not match actual run")
+        configs = generate_experiment_configs()
+        print(f"      Generated {len(configs)} configurations")
+    
     
     # Find trace files
     print("\n[2/8] Locating trace files...")
@@ -352,9 +368,6 @@ def build_database(trace_dir: Path, output_path: Path) -> Dict[str, Any]:
     print(f"      CPU trace: {cpu_trace_path.name}")
     print(f"      GPU traces: {len(gpu_trace_paths)} files")
     
-    if len(gpu_trace_paths) != 5:
-        print(f"      WARNING: Expected 5 GPU trace files, found {len(gpu_trace_paths)}")
-    
     # Load CPU trace
     print("\n[3/8] Loading CPU trace...")
     cpu_trace = load_trace(str(cpu_trace_path))
@@ -363,14 +376,19 @@ def build_database(trace_dir: Path, output_path: Path) -> Dict[str, Any]:
     # Extract matmul operations
     print("\n[4/8] Extracting matmul operations...")
     matmul_ops = extract_matmul_operations(cpu_trace)
-    print(f"      Found {len(matmul_ops)} matmul operations")
+    print(f"      Found {len(matmul_ops)} matmul operations in CPU trace")
     
-    # Check if count matches expected (configs × repeats)
-    expected_ops = len(configs) * len(gpu_trace_paths)
-    if len(matmul_ops) == expected_ops:
-        print(f"      ✓ Count matches: {len(configs)} configs × {len(gpu_trace_paths)} repeats = {expected_ops} ops")
-    else:
-        print(f"      ⚠ WARNING: Expected {expected_ops} ops ({len(configs)} × {len(gpu_trace_paths)}), found {len(matmul_ops)}")
+    # Calculate how many complete repeats we have in CPU trace
+    ops_per_repeat = len(configs)
+    complete_repeats = len(matmul_ops) // ops_per_repeat
+    partial_ops = len(matmul_ops) % ops_per_repeat
+    
+    if complete_repeats < len(gpu_trace_paths):
+        print(f"      ⚠ CPU trace incomplete:")
+        print(f"        - Complete repeats: {complete_repeats}/{len(gpu_trace_paths)}")
+        if partial_ops > 0:
+            print(f"        - Partial repeat: {partial_ops}/{ops_per_repeat} ops")
+        print(f"        - Later repeats will use GPU trace only (may have missing data)")
     
     # Initialize database structure
     database = {
@@ -452,7 +470,7 @@ def build_database(trace_dir: Path, output_path: Path) -> Dict[str, Any]:
                     'status': 'error',
                     'error_message': 'Corrupted GPU trace file',
                     'kernels': [],
-                    'timing': {'total_kernel_time': 0.0}
+                    'timing': {'total_kernel_time': None}
                 }
                 config_data_map[config_idx]['data']['repeats'].append(repeat_data)
             continue
@@ -471,7 +489,8 @@ def build_database(trace_dir: Path, output_path: Path) -> Dict[str, Any]:
                 # Get the CPU operation for THIS config and repeat
                 cpu_op_idx = config_idx + (repeat_idx * len(configs))
                 if cpu_op_idx >= len(matmul_ops):
-                    raise IndexError(f"CPU op index {cpu_op_idx} out of range")
+                    # CPU trace is incomplete for this repeat
+                    raise IndexError(f"CPU trace incomplete: op {cpu_op_idx} not found (trace has {len(matmul_ops)} ops)")
                 
                 cpu_op = matmul_ops[cpu_op_idx]
                 
@@ -507,7 +526,7 @@ def build_database(trace_dir: Path, output_path: Path) -> Dict[str, Any]:
                     'status': 'error',
                     'error_message': str(e),
                     'kernels': [],
-                    'timing': {'total_kernel_time': 0.0}
+                    'timing': {'total_kernel_time': None}
                 }
                 processing_errors.append(f"Config {config_idx}, Repeat {repeat_idx}: {str(e)}")
             
