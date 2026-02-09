@@ -1,0 +1,230 @@
+================================================================================
+MINIMAL P2P PROFILER - COMPREHENSIVE RESULTS SUMMARY
+================================================================================
+
+Timestamp: 2026-02-09 14:19:03
+Output Directory: ./p2p_results_20260209_141735
+
+--------------------------------------------------------------------------------
+RUN CONFIGURATION
+--------------------------------------------------------------------------------
+Number of GPUs: 4
+Message Sizes: 10 (from 1 to 10000000000 bytes)
+Repetitions per config: 15
+Warmup iterations: 3
+Clock locking: YES
+Strict serial: YES
+Total measurements: 1800
+
+--------------------------------------------------------------------------------
+TOPOLOGY
+--------------------------------------------------------------------------------
+GPUs: 4
+Interconnect: NVLink
+NVLink Lanes: 12
+
+PCIe Configuration:
+GPU    Gen (Max)    Gen (Cur)    Width (Max)   Width (Cur)  
+--------------------------------------------------------------------------------
+GPU 0   Gen4         Gen4         16x           16x          
+GPU 1   Gen4         Gen4         16x           16x          
+GPU 2   Gen4         Gen4         16x           16x          
+GPU 3   Gen4         Gen4         16x           16x          
+
+Topology Matrix (nvidia-smi topo -m):
+	[4mGPU0	GPU1	GPU2	GPU3	NIC0	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	NV12	SYS	SYS	NODE	0-23	0		N/A
+GPU1	NV12	 X 	SYS	SYS	SYS	24-47	1		N/A
+GPU2	SYS	SYS	 X 	NV12	SYS	48-71	2		N/A
+GPU3	SYS	SYS	NV12	 X 	SYS	72-95	3		N/A
+NIC0	NODE	SYS	SYS	SYS	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: mlx5_0
+
+
+================================================================================
+REGRESSION METHOD: LINEAR (OLS) - Unconstrained
+================================================================================
+
+Pair         Latency (μs)    Bandwidth (GB/s)   R²         Status    
+--------------------------------------------------------------------------------
+GPU 0→1           -15.125*           259.129      1.0000  OK        
+GPU 0→2             8.109             23.280      1.0000  OK        
+GPU 0→3             1.111             22.319      1.0000  OK        
+GPU 1→0           -15.744*           260.999      1.0000  OK        
+GPU 1→2             4.319             22.666      1.0000  OK        
+GPU 1→3            10.701             23.234      1.0000  OK        
+GPU 2→0            -0.488*            23.241      1.0000  OK        
+GPU 2→1             7.421             22.574      1.0000  OK        
+GPU 2→3           -18.577*           260.760      1.0000  OK        
+GPU 3→0             7.587             22.642      1.0000  OK        
+GPU 3→1            12.014             23.350      1.0000  OK        
+GPU 3→2           -17.693*           260.852      1.0000  OK        
+
+--------------------------------------------------------------------------------
+Summary Statistics (LINEAR (OLS) - Unconstrained):
+  Successful: 12/12 pairs
+  Latency:    min=-18.577 μs, max=12.014 μs, mean=-1.364 μs
+  Bandwidth:  min=22.319 GB/s, max=260.999 GB/s, mean=102.087 GB/s
+  R²:         min=1.0000, max=1.0000, mean=1.0000
+
+================================================================================
+REGRESSION METHOD: LINEAR (OLS) - Constrained
+================================================================================
+
+Pair         Latency (μs)    Bandwidth (GB/s)   R²         Status    
+--------------------------------------------------------------------------------
+GPU 0→1             0.001            259.239      1.0000  OK        
+GPU 0→2             8.109             23.280      1.0000  OK        
+GPU 0→3             1.111             22.319      1.0000  OK        
+GPU 1→0             0.001            261.115      1.0000  OK        
+GPU 1→2             4.319             22.666      1.0000  OK        
+GPU 1→3            10.701             23.234      1.0000  OK        
+GPU 2→0             0.001             23.241      1.0000  OK        
+GPU 2→1             7.421             22.574      1.0000  OK        
+GPU 2→3             0.001            260.896      1.0000  OK        
+GPU 3→0             7.587             22.642      1.0000  OK        
+GPU 3→1            12.014             23.350      1.0000  OK        
+GPU 3→2             0.001            260.982      1.0000  OK        
+
+--------------------------------------------------------------------------------
+Summary Statistics (LINEAR (OLS) - Constrained):
+  Successful: 12/12 pairs
+  Latency:    min=0.001 μs, max=12.014 μs, mean=4.272 μs
+  Bandwidth:  min=22.319 GB/s, max=261.115 GB/s, mean=102.128 GB/s
+  R²:         min=1.0000, max=1.0000, mean=1.0000
+
+================================================================================
+REGRESSION METHOD: HUBER - Unconstrained
+================================================================================
+
+Pair         Latency (μs)    Bandwidth (GB/s)   R²         Status    
+--------------------------------------------------------------------------------
+GPU 0→1             0.000            259.143      1.0000  OK        
+GPU 0→2      N/A             N/A                N/A        FAILED    
+GPU 0→3             0.000             22.320      1.0000  OK        
+GPU 1→0             0.000            261.115      1.0000  OK        
+GPU 1→2             0.000             22.677      1.0000  OK        
+GPU 1→3      N/A             N/A                N/A        FAILED    
+GPU 2→0      N/A             N/A                N/A        FAILED    
+GPU 2→1             0.000             22.569      1.0000  OK        
+GPU 2→3             0.000            260.825      1.0000  OK        
+GPU 3→0             0.000             22.656      1.0000  OK        
+GPU 3→1      N/A             N/A                N/A        FAILED    
+GPU 3→2             0.000            260.881      1.0000  OK        
+
+--------------------------------------------------------------------------------
+Summary Statistics (HUBER - Unconstrained):
+  Successful: 8/12 pairs
+  Latency:    min=0.000 μs, max=0.000 μs, mean=0.000 μs
+  Bandwidth:  min=22.320 GB/s, max=261.115 GB/s, mean=141.523 GB/s
+  R²:         min=1.0000, max=1.0000, mean=1.0000
+
+================================================================================
+REGRESSION METHOD: HUBER - Constrained
+================================================================================
+
+Pair         Latency (μs)    Bandwidth (GB/s)   R²         Status    
+--------------------------------------------------------------------------------
+GPU 0→1      N/A             N/A                N/A        FAILED    
+GPU 0→2      N/A             N/A                N/A        FAILED    
+GPU 0→3      N/A             N/A                N/A        FAILED    
+GPU 1→0      N/A             N/A                N/A        FAILED    
+GPU 1→2             4.327             22.678      1.0000  OK        
+GPU 1→3            10.701             23.234      1.0000  OK        
+GPU 2→0      N/A             N/A                N/A        FAILED    
+GPU 2→1      N/A             N/A                N/A        FAILED    
+GPU 2→3      N/A             N/A                N/A        FAILED    
+GPU 3→0      N/A             N/A                N/A        FAILED    
+GPU 3→1      N/A             N/A                N/A        FAILED    
+GPU 3→2      N/A             N/A                N/A        FAILED    
+
+--------------------------------------------------------------------------------
+Summary Statistics (HUBER - Constrained):
+  Successful: 2/12 pairs
+  Latency:    min=4.327 μs, max=10.701 μs, mean=7.514 μs
+  Bandwidth:  min=22.678 GB/s, max=23.234 GB/s, mean=22.956 GB/s
+  R²:         min=1.0000, max=1.0000, mean=1.0000
+
+================================================================================
+REGRESSION METHOD: IRLS - Unconstrained
+================================================================================
+
+Pair         Latency (μs)    Bandwidth (GB/s)   R²         Status    
+--------------------------------------------------------------------------------
+GPU 0→1             0.000            259.196      1.0000  OK        
+GPU 0→2             0.000             23.283      1.0000  OK        
+GPU 0→3             0.000             22.320      1.0000  OK        
+GPU 1→0             0.000            261.097      1.0000  OK        
+GPU 1→2             0.000             22.669      1.0000  OK        
+GPU 1→3             0.000             23.234      1.0000  OK        
+GPU 2→0             0.000             23.242      1.0000  OK        
+GPU 2→1             0.000             22.573      1.0000  OK        
+GPU 2→3             0.000            260.834      1.0000  OK        
+GPU 3→0             0.000             22.643      1.0000  OK        
+GPU 3→1             0.000             23.351      1.0000  OK        
+GPU 3→2             0.000            260.929      1.0000  OK        
+
+--------------------------------------------------------------------------------
+Summary Statistics (IRLS - Unconstrained):
+  Successful: 12/12 pairs
+  Latency:    min=0.000 μs, max=0.000 μs, mean=0.000 μs
+  Bandwidth:  min=22.320 GB/s, max=261.097 GB/s, mean=102.114 GB/s
+  R²:         min=1.0000, max=1.0000, mean=1.0000
+
+================================================================================
+REGRESSION METHOD: IRLS - Constrained
+================================================================================
+
+Pair         Latency (μs)    Bandwidth (GB/s)   R²         Status    
+--------------------------------------------------------------------------------
+GPU 0→1             0.001            259.239      1.0000  OK        
+GPU 0→2             0.001             23.283      1.0000  OK        
+GPU 0→3             0.001             22.320      1.0000  OK        
+GPU 1→0             0.001            261.115      1.0000  OK        
+GPU 1→2             0.001             22.669      1.0000  OK        
+GPU 1→3             0.001             23.234      1.0000  OK        
+GPU 2→0             0.001             23.241      1.0000  OK        
+GPU 2→1             0.001             22.573      1.0000  OK        
+GPU 2→3             0.001            260.896      1.0000  OK        
+GPU 3→0             0.001             22.643      1.0000  OK        
+GPU 3→1             0.001             23.351      1.0000  OK        
+GPU 3→2             0.001            260.982      1.0000  OK        
+
+--------------------------------------------------------------------------------
+Summary Statistics (IRLS - Constrained):
+  Successful: 12/12 pairs
+  Latency:    min=0.001 μs, max=0.001 μs, mean=0.001 μs
+  Bandwidth:  min=22.320 GB/s, max=261.115 GB/s, mean=102.129 GB/s
+  R²:         min=1.0000, max=1.0000, mean=1.0000
+
+================================================================================
+COMPARISON: AVERAGE METRICS ACROSS SUCCESSFUL FITS
+================================================================================
+
+Method                         Success      Avg Lat (μs)    Avg BW (GB/s)   Avg R²    
+--------------------------------------------------------------------------------
+LINEAR (OLS) - Unconstrained   12/12               -1.36         102.087      1.0000
+LINEAR (OLS) - Constrained     12/12                4.27         102.128      1.0000
+HUBER - Unconstrained          8/12                 0.00         141.523      1.0000
+HUBER - Constrained            2/12                 7.51          22.956      1.0000
+IRLS - Unconstrained           12/12                0.00         102.114      1.0000
+IRLS - Constrained             12/12                0.00         102.129      1.0000
+
+================================================================================
+* Negative latency indicates unphysical result (only in unconstrained fits)
+================================================================================
+END OF REPORT
+================================================================================
