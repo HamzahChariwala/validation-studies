@@ -88,15 +88,17 @@ from networking.utils import (
 # CONFIGURATION
 # ============================================================================
 
-# Message sizes (10 evenly-spaced for efficient profiling)
-MIN_SIZE = 1024  # 1 KB
-MAX_SIZE = 1073741824  # 1 GB
+# Message sizes (10 logarithmically-spaced for better small-message characterization)
+MIN_SIZE = 1  # 1 KB
+# MAX_SIZE = 1073741824  # 1 GB
+MAX_SIZE = 10000000000  # 10 GB
 NUM_SIZES = 10
-MESSAGE_SIZES = np.linspace(MIN_SIZE, MAX_SIZE, NUM_SIZES, dtype=np.int64).tolist()
+# Use log spacing to cluster more samples at small message sizes
+MESSAGE_SIZES = np.logspace(np.log10(MIN_SIZE), np.log10(MAX_SIZE), NUM_SIZES, dtype=np.int64).tolist()
 
 # Profiling parameters
 WARMUP_ITERATIONS = 3
-REPEAT_COUNT = 5  # 5 repetitions per config
+REPEAT_COUNT = 10  # 5 repetitions per config
 
 
 # ============================================================================
@@ -770,112 +772,251 @@ def run_profiling(rank: int, world_size: int, output_dir: str, strict_serial: bo
 # ANALYSIS - THREE REGRESSION METHODS
 # ============================================================================
 
-def linear_regression(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
+def linear_regression_unconstrained(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
     """
-    Perform standard linear regression (Ordinary Least Squares).
+    Perform standard linear regression (Ordinary Least Squares) - UNCONSTRAINED.
     
     Returns:
-        (slope, intercept, r_squared)
+        (slope, intercept, r_squared) or None if failed
     """
-    result = stats.linregress(x, y)
-    slope = result.slope
-    intercept = result.intercept
-    r_squared = result.rvalue ** 2
-    
-    # Ensure intercept is positive
-    if intercept <= 0:
-        intercept = 0.001
-    
-    return slope, intercept, r_squared
+    try:
+        result = stats.linregress(x, y)
+        slope = result.slope
+        intercept = result.intercept
+        r_squared = result.rvalue ** 2
+        return slope, intercept, r_squared
+    except Exception as e:
+        return None
 
 
-def huber_regression(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
+def linear_regression_constrained(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
     """
-    Perform Huber regression (robust to outliers).
+    Perform standard linear regression with INTERCEPT > 0 constraint.
+    Uses curve_fit with bounds to enforce positive intercept.
     
     Returns:
-        (slope, intercept, r_squared)
+        (slope, intercept, r_squared) or None if failed
     """
-    huber = HuberRegressor(epsilon=1.35, max_iter=1000)
-    X = x.reshape(-1, 1)
-    huber.fit(X, y)
-    
-    slope = huber.coef_[0]
-    intercept = huber.intercept_
-    
-    # Ensure intercept is positive
-    if intercept <= 0:
-        intercept = 0.001
-    
-    # Calculate R²
-    y_pred = slope * x + intercept
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-    
-    return slope, intercept, r_squared
+    try:
+        from scipy.optimize import curve_fit
+        
+        def linear_model(x_val, slope, intercept):
+            return slope * x_val + intercept
+        
+        # Initial guess from unconstrained fit
+        result = stats.linregress(x, y)
+        p0 = [max(1e-10, result.slope), max(0.001, result.intercept)]
+        
+        # Bounds: slope > 0, intercept > 0
+        bounds = ([1e-10, 0.001], [np.inf, np.inf])
+        
+        popt, _ = curve_fit(linear_model, x, y, p0=p0, bounds=bounds, maxfev=10000)
+        slope, intercept = popt
+        
+        # Calculate R²
+        y_pred = slope * x + intercept
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        return slope, intercept, r_squared
+    except Exception as e:
+        return None
 
 
-def irls_regression(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e-6) -> Tuple[float, float, float]:
+def huber_regression_unconstrained(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
     """
-    Perform Iteratively Reweighted Least Squares (IRLS) regression.
+    Perform Huber regression (robust to outliers) - UNCONSTRAINED.
     
     Returns:
-        (slope, intercept, r_squared)
+        (slope, intercept, r_squared) or None if failed
     """
-    # Initialize with OLS
-    X_design = np.column_stack([x, np.ones_like(x)])
-    beta = np.linalg.lstsq(X_design, y, rcond=None)[0]
-    
-    for iteration in range(max_iter):
-        # Calculate residuals
-        y_pred = X_design @ beta
-        residuals = y - y_pred
+    try:
+        huber = HuberRegressor(epsilon=1.35, max_iter=1000, fit_intercept=True)
+        X = x.reshape(-1, 1)
+        huber.fit(X, y)
         
-        # Calculate weights using Huber's function
-        k = 1.345 * np.median(np.abs(residuals))  # Robust scale estimate
-        weights = np.ones_like(residuals)
-        outlier_mask = np.abs(residuals) > k
-        weights[outlier_mask] = k / np.abs(residuals[outlier_mask])
+        slope = huber.coef_[0]
+        intercept = huber.intercept_
         
-        # Weighted least squares
-        W = np.diag(weights)
-        try:
-            beta_new = np.linalg.lstsq(X_design.T @ W @ X_design, 
-                                        X_design.T @ W @ y, rcond=None)[0]
-        except np.linalg.LinAlgError:
-            break
+        # Calculate R²
+        y_pred = slope * x + intercept
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
         
-        # Check convergence
-        if np.allclose(beta, beta_new, atol=tol):
-            break
+        return slope, intercept, r_squared
+    except Exception as e:
+        return None
+
+
+def huber_regression_constrained(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Perform Huber regression with INTERCEPT > 0 constraint.
+    Uses custom implementation with constrained optimization.
+    
+    Returns:
+        (slope, intercept, r_squared) or None if failed
+    """
+    try:
+        from scipy.optimize import minimize
         
-        beta = beta_new
+        def huber_loss(params, x, y, epsilon=1.35):
+            slope, intercept = params
+            residuals = y - (slope * x + intercept)
+            loss = np.sum(np.where(np.abs(residuals) <= epsilon,
+                                   0.5 * residuals**2,
+                                   epsilon * (np.abs(residuals) - 0.5 * epsilon)))
+            return loss
+        
+        # Initial guess from unconstrained
+        result = stats.linregress(x, y)
+        x0 = [max(1e-10, result.slope), max(0.001, result.intercept)]
+        
+        # Bounds: slope > 0, intercept > 0.001
+        bounds = [(1e-10, None), (0.001, None)]
+        
+        res = minimize(huber_loss, x0, args=(x, y), method='L-BFGS-B', 
+                      bounds=bounds, options={'maxiter': 1000})
+        
+        if not res.success:
+            return None
+        
+        slope, intercept = res.x
+        
+        # Calculate R²
+        y_pred = slope * x + intercept
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        return slope, intercept, r_squared
+    except Exception as e:
+        return None
+
+
+def irls_regression_unconstrained(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e-6) -> Tuple[float, float, float]:
+    """
+    Perform Iteratively Reweighted Least Squares (IRLS) regression - UNCONSTRAINED.
     
-    slope, intercept = beta
+    Returns:
+        (slope, intercept, r_squared) or None if failed
+    """
+    try:
+        # Initialize with OLS
+        X_design = np.column_stack([x, np.ones_like(x)])
+        beta = np.linalg.lstsq(X_design, y, rcond=None)[0]
+        
+        for iteration in range(max_iter):
+            # Calculate residuals
+            y_pred = X_design @ beta
+            residuals = y - y_pred
+            
+            # Calculate weights using Huber's function
+            k = 1.345 * np.median(np.abs(residuals))  # Robust scale estimate
+            weights = np.ones_like(residuals)
+            outlier_mask = np.abs(residuals) > k
+            weights[outlier_mask] = k / np.abs(residuals[outlier_mask])
+            
+            # Weighted least squares
+            W = np.diag(weights)
+            try:
+                beta_new = np.linalg.lstsq(X_design.T @ W @ X_design, 
+                                            X_design.T @ W @ y, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                break
+            
+            # Check convergence
+            if np.allclose(beta, beta_new, atol=tol):
+                break
+            
+            beta = beta_new
+        
+        slope, intercept = beta
+        
+        # Calculate R²
+        y_pred = slope * x + intercept
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        return slope, intercept, r_squared
+    except Exception as e:
+        return None
+
+
+def irls_regression_constrained(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e-6) -> Tuple[float, float, float]:
+    """
+    Perform IRLS regression with INTERCEPT > 0 constraint.
+    Uses projected IRLS with bounds on intercept.
     
-    # Ensure intercept is positive
-    if intercept <= 0:
-        intercept = 0.001
-    
-    # Calculate R²
-    y_pred = slope * x + intercept
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-    
-    return slope, intercept, r_squared
+    Returns:
+        (slope, intercept, r_squared) or None if failed
+    """
+    try:
+        # Initialize with constrained OLS
+        result = linear_regression_constrained(x, y)
+        if result is None:
+            return None
+        
+        slope, intercept = result[0], result[1]
+        beta = np.array([slope, intercept])
+        
+        X_design = np.column_stack([x, np.ones_like(x)])
+        
+        for iteration in range(max_iter):
+            # Calculate residuals
+            y_pred = X_design @ beta
+            residuals = y - y_pred
+            
+            # Calculate weights using Huber's function
+            k = 1.345 * np.median(np.abs(residuals))
+            weights = np.ones_like(residuals)
+            outlier_mask = np.abs(residuals) > k
+            weights[outlier_mask] = k / np.abs(residuals[outlier_mask])
+            
+            # Weighted least squares
+            W = np.diag(weights)
+            try:
+                beta_new = np.linalg.lstsq(X_design.T @ W @ X_design, 
+                                            X_design.T @ W @ y, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                break
+            
+            # Project to constraint: intercept > 0.001
+            if beta_new[1] < 0.001:
+                beta_new[1] = 0.001
+            if beta_new[0] < 1e-10:
+                beta_new[0] = 1e-10
+            
+            # Check convergence
+            if np.allclose(beta, beta_new, atol=tol):
+                break
+            
+            beta = beta_new
+        
+        slope, intercept = beta
+        
+        # Calculate R²
+        y_pred = slope * x + intercept
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - np.mean(y)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        return slope, intercept, r_squared
+    except Exception as e:
+        return None
 
 
 def analyze_results(measurements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Analyze kernel timing results using three regression methods.
+    Analyze kernel timing results using three regression methods (each with constrained and unconstrained variants).
     
     Returns:
-        Analysis results dictionary with results from all three methods
+        Analysis results dictionary with results from all six regression variants
     """
     print("\n" + "=" * 80)
-    print("ANALYZING RESULTS (THREE REGRESSION METHODS ON KERNEL TIMES)")
+    print("ANALYZING RESULTS (3 METHODS × 2 VARIANTS = 6 REGRESSIONS ON KERNEL TIMES)")
     print("=" * 80)
     
     # Convert to arrays
@@ -887,7 +1028,7 @@ def analyze_results(measurements: List[Dict[str, Any]]) -> Dict[str, Any]:
         data[key]['sizes'].append(m['size'])
         data[key]['durations_us'].append(m['duration_us'])
     
-    # Perform all three regressions for each GPU pair
+    # Perform all six regressions for each GPU pair
     results = []
     for (src, dst), pair_data in data.items():
         sizes = np.array(pair_data['sizes'])
@@ -897,39 +1038,85 @@ def analyze_results(measurements: List[Dict[str, Any]]) -> Dict[str, Any]:
             print(f"⚠ Warning: GPU {src}→{dst} has insufficient data")
             continue
         
-        # 1. Vanilla Linear Regression
-        slope_lin, intercept_lin, r2_lin = linear_regression(sizes, durations_us)
-        bw_lin = (1.0 / slope_lin) * 1e-3 if slope_lin > 0 else 0
-        lat_lin = intercept_lin
-        
-        # 2. Huber Regression
-        slope_hub, intercept_hub, r2_hub = huber_regression(sizes, durations_us)
-        bw_hub = (1.0 / slope_hub) * 1e-3 if slope_hub > 0 else 0
-        lat_hub = intercept_hub
-        
-        # 3. IRLS Regression
-        slope_irls, intercept_irls, r2_irls = irls_regression(sizes, durations_us)
-        bw_irls = (1.0 / slope_irls) * 1e-3 if slope_irls > 0 else 0
-        lat_irls = intercept_irls
-        
-        results.append({
+        result_dict = {
             'src': src,
             'dst': dst,
-            # Linear regression results
-            'latency_us_linear': lat_lin,
-            'bandwidth_gbps_linear': bw_lin,
-            'r_squared_linear': r2_lin,
-            # Huber regression results
-            'latency_us_huber': lat_hub,
-            'bandwidth_gbps_huber': bw_hub,
-            'r_squared_huber': r2_hub,
-            # IRLS regression results
-            'latency_us_irls': lat_irls,
-            'bandwidth_gbps_irls': bw_irls,
-            'r_squared_irls': r2_irls,
-            # Metadata
             'num_samples': len(sizes),
-        })
+        }
+        
+        # 1. Linear Regression (Unconstrained)
+        res = linear_regression_unconstrained(sizes, durations_us)
+        if res is not None:
+            slope, intercept, r2 = res
+            result_dict['latency_us_linear_unconstr'] = intercept
+            result_dict['bandwidth_gbps_linear_unconstr'] = (1.0 / slope) * 1e-3 if slope > 0 else np.nan
+            result_dict['r_squared_linear_unconstr'] = r2
+        else:
+            result_dict['latency_us_linear_unconstr'] = np.nan
+            result_dict['bandwidth_gbps_linear_unconstr'] = np.nan
+            result_dict['r_squared_linear_unconstr'] = np.nan
+        
+        # 2. Linear Regression (Constrained)
+        res = linear_regression_constrained(sizes, durations_us)
+        if res is not None:
+            slope, intercept, r2 = res
+            result_dict['latency_us_linear_constr'] = intercept
+            result_dict['bandwidth_gbps_linear_constr'] = (1.0 / slope) * 1e-3 if slope > 0 else np.nan
+            result_dict['r_squared_linear_constr'] = r2
+        else:
+            result_dict['latency_us_linear_constr'] = np.nan
+            result_dict['bandwidth_gbps_linear_constr'] = np.nan
+            result_dict['r_squared_linear_constr'] = np.nan
+        
+        # 3. Huber Regression (Unconstrained)
+        res = huber_regression_unconstrained(sizes, durations_us)
+        if res is not None:
+            slope, intercept, r2 = res
+            result_dict['latency_us_huber_unconstr'] = intercept
+            result_dict['bandwidth_gbps_huber_unconstr'] = (1.0 / slope) * 1e-3 if slope > 0 else np.nan
+            result_dict['r_squared_huber_unconstr'] = r2
+        else:
+            result_dict['latency_us_huber_unconstr'] = np.nan
+            result_dict['bandwidth_gbps_huber_unconstr'] = np.nan
+            result_dict['r_squared_huber_unconstr'] = np.nan
+        
+        # 4. Huber Regression (Constrained)
+        res = huber_regression_constrained(sizes, durations_us)
+        if res is not None:
+            slope, intercept, r2 = res
+            result_dict['latency_us_huber_constr'] = intercept
+            result_dict['bandwidth_gbps_huber_constr'] = (1.0 / slope) * 1e-3 if slope > 0 else np.nan
+            result_dict['r_squared_huber_constr'] = r2
+        else:
+            result_dict['latency_us_huber_constr'] = np.nan
+            result_dict['bandwidth_gbps_huber_constr'] = np.nan
+            result_dict['r_squared_huber_constr'] = np.nan
+        
+        # 5. IRLS Regression (Unconstrained)
+        res = irls_regression_unconstrained(sizes, durations_us)
+        if res is not None:
+            slope, intercept, r2 = res
+            result_dict['latency_us_irls_unconstr'] = intercept
+            result_dict['bandwidth_gbps_irls_unconstr'] = (1.0 / slope) * 1e-3 if slope > 0 else np.nan
+            result_dict['r_squared_irls_unconstr'] = r2
+        else:
+            result_dict['latency_us_irls_unconstr'] = np.nan
+            result_dict['bandwidth_gbps_irls_unconstr'] = np.nan
+            result_dict['r_squared_irls_unconstr'] = np.nan
+        
+        # 6. IRLS Regression (Constrained)
+        res = irls_regression_constrained(sizes, durations_us)
+        if res is not None:
+            slope, intercept, r2 = res
+            result_dict['latency_us_irls_constr'] = intercept
+            result_dict['bandwidth_gbps_irls_constr'] = (1.0 / slope) * 1e-3 if slope > 0 else np.nan
+            result_dict['r_squared_irls_constr'] = r2
+        else:
+            result_dict['latency_us_irls_constr'] = np.nan
+            result_dict['bandwidth_gbps_irls_constr'] = np.nan
+            result_dict['r_squared_irls_constr'] = np.nan
+        
+        results.append(result_dict)
     
     return {
         'per_pair': results,
@@ -979,16 +1166,26 @@ def print_summary(analysis: Dict[str, Any], topology: Dict[str, Any]):
         print(topology['topo_matrix'])
     
     print(f"\nRegression Methods: Linear (OLS), Huber (robust), IRLS (iterative)")
+    print(f"Variants: Constrained (intercept > 0) and Unconstrained")
     print(f"GPU Pairs Analyzed: {analysis['num_pairs']}")
     
     results = analysis['per_pair']
     
-    # Print detailed table for each method
-    for method, method_name in [('linear', 'LINEAR (OLS)'), ('huber', 'HUBER'), ('irls', 'IRLS')]:
+    # Print detailed table for each method variant
+    method_variants = [
+        ('linear_unconstr', 'LINEAR (OLS) - Unconstrained'),
+        ('linear_constr', 'LINEAR (OLS) - Constrained'),
+        ('huber_unconstr', 'HUBER - Unconstrained'),
+        ('huber_constr', 'HUBER - Constrained'),
+        ('irls_unconstr', 'IRLS - Unconstrained'),
+        ('irls_constr', 'IRLS - Constrained'),
+    ]
+    
+    for method, method_name in method_variants:
         print(f"\n{'=' * 80}")
         print(f"REGRESSION METHOD: {method_name}")
         print(f"{'=' * 80}")
-        print(f"\n{'Pair':<12} {'Latency (μs)':<15} {'Bandwidth (GB/s)':<18} {'R²':<10} {'Samples':<10}")
+        print(f"\n{'Pair':<12} {'Latency (μs)':<15} {'Bandwidth (GB/s)':<18} {'R²':<10} {'Status':<10}")
         print("-" * 80)
         
         for r in sorted(results, key=lambda x: (x['src'], x['dst'])):
@@ -997,38 +1194,72 @@ def print_summary(analysis: Dict[str, Any], topology: Dict[str, Any]):
             bw_key = f'bandwidth_gbps_{method}'
             r2_key = f'r_squared_{method}'
             
-            print(f"{pair_str:<12} {r[lat_key]:>12.2f}    {r[bw_key]:>15.3f}    "
-                  f"{r[r2_key]:>8.4f}  {r['num_samples']:>8d}")
+            # Check if this regression succeeded
+            if np.isnan(r.get(lat_key, np.nan)):
+                status = "FAILED"
+                print(f"{pair_str:<12} {'N/A':<15} {'N/A':<18} {'N/A':<10} {status:<10}")
+            else:
+                status = "OK"
+                lat_val = r[lat_key]
+                bw_val = r[bw_key]
+                r2_val = r[r2_key]
+                
+                # Highlight negative latencies (should only happen in unconstrained)
+                lat_str = f"{lat_val:>12.3f}"
+                if lat_val < 0:
+                    lat_str += "*"
+                
+                print(f"{pair_str:<12} {lat_str:<15} {bw_val:>15.3f}    "
+                      f"{r2_val:>8.4f}  {status:<10}")
         
-        # Summary statistics for this method
-        latencies = [r[f'latency_us_{method}'] for r in results]
-        bandwidths = [r[f'bandwidth_gbps_{method}'] for r in results]
-        r_squareds = [r[f'r_squared_{method}'] for r in results]
+        # Summary statistics for this method (excluding failures)
+        latencies = [r[f'latency_us_{method}'] for r in results if not np.isnan(r.get(f'latency_us_{method}', np.nan))]
+        bandwidths = [r[f'bandwidth_gbps_{method}'] for r in results if not np.isnan(r.get(f'bandwidth_gbps_{method}', np.nan))]
+        r_squareds = [r[f'r_squared_{method}'] for r in results if not np.isnan(r.get(f'r_squared_{method}', np.nan))]
         
-        print("\n" + "-" * 80)
-        print(f"Summary Statistics ({method_name}):")
-        print(f"  Latency:    min={min(latencies):.2f} μs, max={max(latencies):.2f} μs, "
-              f"mean={np.mean(latencies):.2f} μs, std={np.std(latencies):.2f} μs")
-        print(f"  Bandwidth:  min={min(bandwidths):.3f} GB/s, max={max(bandwidths):.3f} GB/s, "
-              f"mean={np.mean(bandwidths):.3f} GB/s, std={np.std(bandwidths):.3f} GB/s")
-        print(f"  R² (fit quality): min={min(r_squareds):.4f}, max={max(r_squareds):.4f}, "
-              f"mean={np.mean(r_squareds):.4f}")
+        if latencies:
+            print("\n" + "-" * 80)
+            print(f"Summary Statistics ({method_name}):")
+            print(f"  Successful: {len(latencies)}/{len(results)} pairs")
+            print(f"  Latency:    min={min(latencies):.3f} μs, max={max(latencies):.3f} μs, "
+                  f"mean={np.mean(latencies):.3f} μs")
+            print(f"  Bandwidth:  min={min(bandwidths):.3f} GB/s, max={max(bandwidths):.3f} GB/s, "
+                  f"mean={np.mean(bandwidths):.3f} GB/s")
+            print(f"  R²:         min={min(r_squareds):.4f}, max={max(r_squareds):.4f}, "
+                  f"mean={np.mean(r_squareds):.4f}")
+            
+            # Report negative latencies
+            neg_lats = [r for r in results if not np.isnan(r.get(f'latency_us_{method}', np.nan)) and r[f'latency_us_{method}'] < 0]
+            if neg_lats:
+                print(f"  ⚠ WARNING: {len(neg_lats)} pair(s) with negative latency (unphysical)")
+        else:
+            print("\n" + "-" * 80)
+            print(f"⚠ ALL REGRESSIONS FAILED for {method_name}")
     
     # Comparison table
     print(f"\n{'=' * 80}")
-    print(f"COMPARISON: AVERAGE METRICS ACROSS ALL GPU PAIRS")
+    print(f"COMPARISON: AVERAGE METRICS ACROSS ALL SUCCESSFUL FITS")
     print(f"{'=' * 80}")
-    print(f"\n{'Method':<15} {'Avg Latency (μs)':<20} {'Avg Bandwidth (GB/s)':<22} {'Avg R²':<10}")
+    print(f"\n{'Method':<30} {'Successes':<12} {'Avg Lat (μs)':<15} {'Avg BW (GB/s)':<15} {'Avg R²':<10}")
     print("-" * 80)
     
-    for method, method_name in [('linear', 'Linear (OLS)'), ('huber', 'Huber'), ('irls', 'IRLS')]:
-        lat_avg = np.mean([r[f'latency_us_{method}'] for r in results])
-        bw_avg = np.mean([r[f'bandwidth_gbps_{method}'] for r in results])
-        r2_avg = np.mean([r[f'r_squared_{method}'] for r in results])
+    for method, method_name in method_variants:
+        latencies = [r[f'latency_us_{method}'] for r in results if not np.isnan(r.get(f'latency_us_{method}', np.nan))]
+        bandwidths = [r[f'bandwidth_gbps_{method}'] for r in results if not np.isnan(r.get(f'bandwidth_gbps_{method}', np.nan))]
+        r_squareds = [r[f'r_squared_{method}'] for r in results if not np.isnan(r.get(f'r_squared_{method}', np.nan))]
         
-        print(f"{method_name:<15} {lat_avg:>17.2f}    {bw_avg:>19.3f}    {r2_avg:>8.4f}")
+        success_str = f"{len(latencies)}/{len(results)}"
+        
+        if latencies:
+            lat_avg = np.mean(latencies)
+            bw_avg = np.mean(bandwidths)
+            r2_avg = np.mean(r_squareds)
+            print(f"{method_name:<30} {success_str:<12} {lat_avg:>12.2f}    {bw_avg:>12.3f}    {r2_avg:>8.4f}")
+        else:
+            print(f"{method_name:<30} {success_str:<12} {'ALL FAILED':<38}")
     
     print("=" * 80)
+    print("\n* Negative latency indicates unphysical result (only in unconstrained fits)")
 
 
 def save_results(measurements: List[Dict[str, Any]], analysis: Dict[str, Any], 
@@ -1105,32 +1336,48 @@ def save_results(measurements: List[Dict[str, Any]], analysis: Dict[str, Any],
         'summary_statistics': {}
     }
     
-    # Add summary statistics for each method
+    # Add summary statistics for each method variant
     results = analysis['per_pair']
-    for method in ['linear', 'huber', 'irls']:
-        latencies = [r[f'latency_us_{method}'] for r in results]
-        bandwidths = [r[f'bandwidth_gbps_{method}'] for r in results]
-        r_squareds = [r[f'r_squared_{method}'] for r in results]
+    method_variants = [
+        'linear_unconstr', 'linear_constr',
+        'huber_unconstr', 'huber_constr',
+        'irls_unconstr', 'irls_constr'
+    ]
+    
+    for method in method_variants:
+        # Filter out failed regressions (NaN values)
+        latencies = [r[f'latency_us_{method}'] for r in results if not np.isnan(r.get(f'latency_us_{method}', np.nan))]
+        bandwidths = [r[f'bandwidth_gbps_{method}'] for r in results if not np.isnan(r.get(f'bandwidth_gbps_{method}', np.nan))]
+        r_squareds = [r[f'r_squared_{method}'] for r in results if not np.isnan(r.get(f'r_squared_{method}', np.nan))]
         
-        json_data['summary_statistics'][method] = {
-            'latency_us': {
-                'min': float(np.min(latencies)),
-                'max': float(np.max(latencies)),
-                'mean': float(np.mean(latencies)),
-                'std': float(np.std(latencies)),
-            },
-            'bandwidth_gbps': {
-                'min': float(np.min(bandwidths)),
-                'max': float(np.max(bandwidths)),
-                'mean': float(np.mean(bandwidths)),
-                'std': float(np.std(bandwidths)),
-            },
-            'r_squared': {
-                'min': float(np.min(r_squareds)),
-                'max': float(np.max(r_squareds)),
-                'mean': float(np.mean(r_squareds)),
+        if latencies:
+            json_data['summary_statistics'][method] = {
+                'successful_pairs': len(latencies),
+                'total_pairs': len(results),
+                'latency_us': {
+                    'min': float(np.min(latencies)),
+                    'max': float(np.max(latencies)),
+                    'mean': float(np.mean(latencies)),
+                    'std': float(np.std(latencies)),
+                },
+                'bandwidth_gbps': {
+                    'min': float(np.min(bandwidths)),
+                    'max': float(np.max(bandwidths)),
+                    'mean': float(np.mean(bandwidths)),
+                    'std': float(np.std(bandwidths)),
+                },
+                'r_squared': {
+                    'min': float(np.min(r_squareds)),
+                    'max': float(np.max(r_squareds)),
+                    'mean': float(np.mean(r_squareds)),
+                }
             }
-        }
+        else:
+            json_data['summary_statistics'][method] = {
+                'successful_pairs': 0,
+                'total_pairs': len(results),
+                'note': 'All regressions failed'
+            }
     
     json_path = os.path.join(output_dir, 'results.json')
     with open(json_path, 'w') as f:
@@ -1179,13 +1426,22 @@ def save_results(measurements: List[Dict[str, Any]], analysis: Dict[str, Any],
             f.write(topology['topo_matrix'])
         f.write("\n")
         
-        # Write detailed results for each method
-        for method, method_name in [('linear', 'LINEAR (OLS)'), ('huber', 'HUBER'), ('irls', 'IRLS')]:
+        # Write detailed results for each method variant
+        method_variants_report = [
+            ('linear_unconstr', 'LINEAR (OLS) - Unconstrained'),
+            ('linear_constr', 'LINEAR (OLS) - Constrained'),
+            ('huber_unconstr', 'HUBER - Unconstrained'),
+            ('huber_constr', 'HUBER - Constrained'),
+            ('irls_unconstr', 'IRLS - Unconstrained'),
+            ('irls_constr', 'IRLS - Constrained'),
+        ]
+        
+        for method, method_name in method_variants_report:
             f.write("=" * 80 + "\n")
             f.write(f"REGRESSION METHOD: {method_name}\n")
             f.write("=" * 80 + "\n\n")
             
-            f.write(f"{'Pair':<12} {'Latency (μs)':<15} {'Bandwidth (GB/s)':<18} {'R²':<10} {'Samples':<10}\n")
+            f.write(f"{'Pair':<12} {'Latency (μs)':<15} {'Bandwidth (GB/s)':<18} {'R²':<10} {'Status':<10}\n")
             f.write("-" * 80 + "\n")
             
             for r in sorted(results, key=lambda x: (x['src'], x['dst'])):
@@ -1194,39 +1450,55 @@ def save_results(measurements: List[Dict[str, Any]], analysis: Dict[str, Any],
                 bw_key = f'bandwidth_gbps_{method}'
                 r2_key = f'r_squared_{method}'
                 
-                f.write(f"{pair_str:<12} {r[lat_key]:>12.2f}    {r[bw_key]:>15.3f}    "
-                       f"{r[r2_key]:>8.4f}  {r['num_samples']:>8d}\n")
+                if np.isnan(r.get(lat_key, np.nan)):
+                    f.write(f"{pair_str:<12} {'N/A':<15} {'N/A':<18} {'N/A':<10} {'FAILED':<10}\n")
+                else:
+                    lat_val = r[lat_key]
+                    lat_str = f"{lat_val:>12.3f}"
+                    if lat_val < 0:
+                        lat_str += "*"
+                    f.write(f"{pair_str:<12} {lat_str:<15} {r[bw_key]:>15.3f}    "
+                           f"{r[r2_key]:>8.4f}  {'OK':<10}\n")
             
             # Summary statistics
-            stats = json_data['summary_statistics'][method]
+            stats = json_data['summary_statistics'].get(method, {})
             f.write("\n" + "-" * 80 + "\n")
             f.write(f"Summary Statistics ({method_name}):\n")
-            f.write(f"  Latency:    min={stats['latency_us']['min']:.2f} μs, "
-                   f"max={stats['latency_us']['max']:.2f} μs, "
-                   f"mean={stats['latency_us']['mean']:.2f} μs, "
-                   f"std={stats['latency_us']['std']:.2f} μs\n")
-            f.write(f"  Bandwidth:  min={stats['bandwidth_gbps']['min']:.3f} GB/s, "
-                   f"max={stats['bandwidth_gbps']['max']:.3f} GB/s, "
-                   f"mean={stats['bandwidth_gbps']['mean']:.3f} GB/s, "
-                   f"std={stats['bandwidth_gbps']['std']:.3f} GB/s\n")
-            f.write(f"  R²:         min={stats['r_squared']['min']:.4f}, "
-                   f"max={stats['r_squared']['max']:.4f}, "
-                   f"mean={stats['r_squared']['mean']:.4f}\n\n")
+            
+            if 'note' in stats:
+                f.write(f"  {stats['note']}\n\n")
+            else:
+                f.write(f"  Successful: {stats['successful_pairs']}/{stats['total_pairs']} pairs\n")
+                f.write(f"  Latency:    min={stats['latency_us']['min']:.3f} μs, "
+                       f"max={stats['latency_us']['max']:.3f} μs, "
+                       f"mean={stats['latency_us']['mean']:.3f} μs\n")
+                f.write(f"  Bandwidth:  min={stats['bandwidth_gbps']['min']:.3f} GB/s, "
+                       f"max={stats['bandwidth_gbps']['max']:.3f} GB/s, "
+                       f"mean={stats['bandwidth_gbps']['mean']:.3f} GB/s\n")
+                f.write(f"  R²:         min={stats['r_squared']['min']:.4f}, "
+                       f"max={stats['r_squared']['max']:.4f}, "
+                       f"mean={stats['r_squared']['mean']:.4f}\n\n")
         
         # Comparison table
         f.write("=" * 80 + "\n")
-        f.write("COMPARISON: AVERAGE METRICS ACROSS ALL GPU PAIRS\n")
+        f.write("COMPARISON: AVERAGE METRICS ACROSS SUCCESSFUL FITS\n")
         f.write("=" * 80 + "\n\n")
-        f.write(f"{'Method':<15} {'Avg Latency (μs)':<20} {'Avg Bandwidth (GB/s)':<22} {'Avg R²':<10}\n")
+        f.write(f"{'Method':<30} {'Success':<12} {'Avg Lat (μs)':<15} {'Avg BW (GB/s)':<15} {'Avg R²':<10}\n")
         f.write("-" * 80 + "\n")
         
-        for method, method_name in [('linear', 'Linear (OLS)'), ('huber', 'Huber'), ('irls', 'IRLS')]:
-            stats = json_data['summary_statistics'][method]
-            f.write(f"{method_name:<15} {stats['latency_us']['mean']:>17.2f}    "
-                   f"{stats['bandwidth_gbps']['mean']:>19.3f}    "
-                   f"{stats['r_squared']['mean']:>8.4f}\n")
+        for method, method_name in method_variants_report:
+            stats = json_data['summary_statistics'].get(method, {})
+            if 'note' in stats:
+                f.write(f"{method_name:<30} {'0/' + str(stats['total_pairs']):<12} {'ALL FAILED':<38}\n")
+            else:
+                success_str = f"{stats['successful_pairs']}/{stats['total_pairs']}"
+                f.write(f"{method_name:<30} {success_str:<12} {stats['latency_us']['mean']:>12.2f}    "
+                       f"{stats['bandwidth_gbps']['mean']:>12.3f}    "
+                       f"{stats['r_squared']['mean']:>8.4f}\n")
         
         f.write("\n" + "=" * 80 + "\n")
+        f.write("* Negative latency indicates unphysical result (only in unconstrained fits)\n")
+        f.write("=" * 80 + "\n")
         f.write("END OF REPORT\n")
         f.write("=" * 80 + "\n")
     
