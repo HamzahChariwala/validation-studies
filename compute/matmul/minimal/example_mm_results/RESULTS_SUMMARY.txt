@@ -1,0 +1,113 @@
+================================================================================
+COMPUTE ROOFLINE PROFILER - COMPREHENSIVE RESULTS SUMMARY
+================================================================================
+
+Timestamp: 2026-02-09 17:14:03
+Output Directory: ./compute_roofline_results_20260209_171345
+
+--------------------------------------------------------------------------------
+GPU INFORMATION
+--------------------------------------------------------------------------------
+gpus: {1: {'gpu_id': 1, 'name': 'NVIDIA A100 80GB PCIe', 'compute_capability': '8.0', 'total_memory_gb': 79.1510009765625, 'multi_processor_count': 108, 'driver_version': '535.288.01', 'memory_total_mb': '81920', 'clock_max_graphics_mhz': '1410', 'clock_max_sm_mhz': '1410', 'clock_max_memory_mhz': '1512', 'cuda_version': '12.4', 'pytorch_version': '2.6.0+cu124', 'cudnn_version': 90100}, 2: {'gpu_id': 2, 'name': 'NVIDIA A100 80GB PCIe', 'compute_capability': '8.0', 'total_memory_gb': 79.1510009765625, 'multi_processor_count': 108, 'driver_version': '535.288.01', 'memory_total_mb': '81920', 'clock_max_graphics_mhz': '1410', 'clock_max_sm_mhz': '1410', 'clock_max_memory_mhz': '1512', 'cuda_version': '12.4', 'pytorch_version': '2.6.0+cu124', 'cudnn_version': 90100}, 3: {'gpu_id': 3, 'name': 'NVIDIA A100 80GB PCIe', 'compute_capability': '8.0', 'total_memory_gb': 79.1510009765625, 'multi_processor_count': 108, 'driver_version': '535.288.01', 'memory_total_mb': '81920', 'clock_max_graphics_mhz': '1410', 'clock_max_sm_mhz': '1410', 'clock_max_memory_mhz': '1512', 'cuda_version': '12.4', 'pytorch_version': '2.6.0+cu124', 'cudnn_version': 90100}}
+
+--------------------------------------------------------------------------------
+RUN CONFIGURATION
+--------------------------------------------------------------------------------
+lock_clocks: True
+repeat_count: 5
+warmup_iterations: 3
+world_size: 4
+
+--------------------------------------------------------------------------------
+OVERALL ROOFLINE MODELS (AGGREGATED BY PRECISION) - ALL 3 METHODS
+--------------------------------------------------------------------------------
+
+Precision    Method   Bandwidth        Peak FLOPS       R²         Status  
+--------------------------------------------------------------------------------
+bf16         l2             577.33 GB/s        231.86 TFLOPS  0.791512  OK      
+bf16         huber          630.15 GB/s        238.91 TFLOPS  0.775166  OK      
+bf16         irls           587.55 GB/s        233.80 TFLOPS  0.790716  OK      
+
+fp16         l2             583.83 GB/s        239.48 TFLOPS  0.843160  OK      
+fp16         huber          620.20 GB/s        247.23 TFLOPS  0.832479  OK      
+fp16         irls           440.43 GB/s        195.16 TFLOPS  0.612214  OK      
+
+fp32         l2             156.85 GB/s         17.73 TFLOPS  0.846861  OK      
+fp32         huber          130.22 GB/s         18.16 TFLOPS  0.822748  OK      
+fp32         irls           134.63 GB/s         18.00 TFLOPS  0.829713  OK      
+
+--------------------------------------------------------------------------------
+DETAILED ROOFLINE MODELS (BY PRECISION AND BATCH SIZE) - ALL 3 METHODS
+--------------------------------------------------------------------------------
+
+Precision  Batch    Method   Bandwidth      Peak FLOPS     R²         Status  
+--------------------------------------------------------------------------------
+bf16       1        l2           431.09 GB/s      209.76 TFLOPS  0.805589  OK      
+bf16       1        huber        390.76 GB/s      230.64 TFLOPS  0.781787  OK      
+bf16       1        irls         426.47 GB/s      209.80 TFLOPS  0.805466  OK      
+
+bf16       16       l2           780.05 GB/s      245.26 TFLOPS  0.966761  OK      
+bf16       16       huber        706.95 GB/s      259.38 TFLOPS  0.957138  OK      
+bf16       16       irls         778.63 GB/s      245.27 TFLOPS  0.966755  OK      
+
+bf16       4        l2           600.08 GB/s      244.76 TFLOPS  0.898790  OK      
+bf16       4        huber        619.49 GB/s      253.19 TFLOPS  0.892077  OK      
+bf16       4        irls         604.15 GB/s      247.44 TFLOPS  0.898216  OK      
+
+bf16       8        l2           582.06 GB/s      247.93 TFLOPS  0.854415  OK      
+bf16       8        huber        631.50 GB/s      256.74 TFLOPS  0.834844  OK      
+bf16       8        irls         594.33 GB/s      248.55 TFLOPS  0.853418  OK      
+
+fp16       1        l2           475.73 GB/s      232.72 TFLOPS  0.856454  OK      
+fp16       1        huber        405.80 GB/s      244.25 TFLOPS  0.838779  OK      
+fp16       1        irls         460.56 GB/s      239.67 TFLOPS  0.853226  OK      
+
+fp16       16       l2           775.08 GB/s      241.18 TFLOPS  0.967280  OK      
+fp16       16       huber        753.74 GB/s      242.07 TFLOPS  0.965828  OK      
+fp16       16       irls         773.86 GB/s      241.18 TFLOPS  0.967275  OK      
+
+fp16       4        l2           594.12 GB/s      243.45 TFLOPS  0.902898  OK      
+fp16       4        huber        616.60 GB/s      248.67 TFLOPS  0.898432  OK      
+fp16       4        irls         598.73 GB/s      246.21 TFLOPS  0.902263  OK      
+
+fp16       8        l2           579.28 GB/s      241.87 TFLOPS  0.854398  OK      
+fp16       8        huber        627.92 GB/s      250.69 TFLOPS  0.834279  OK      
+fp16       8        irls         590.85 GB/s      241.90 TFLOPS  0.853488  OK      
+
+fp32       1        l2           144.79 GB/s       17.54 TFLOPS  0.839691  OK      
+fp32       1        huber        114.29 GB/s       17.90 TFLOPS  0.809965  OK      
+fp32       1        irls         115.98 GB/s       17.90 TFLOPS  0.814592  OK      
+
+fp32       16       l2           197.65 GB/s       18.24 TFLOPS  0.935195  OK      
+fp32       16       huber        224.58 GB/s       18.07 TFLOPS  0.916321  OK      
+fp32       16       irls         200.98 GB/s       18.24 TFLOPS  0.934520  OK      
+
+fp32       4        l2           112.81 GB/s       17.91 TFLOPS  0.911624  OK      
+fp32       4        huber        105.20 GB/s       18.16 TFLOPS  0.904716  OK      
+fp32       4        irls         111.17 GB/s       17.98 TFLOPS  0.911222  OK      
+
+fp32       8        l2           169.87 GB/s       18.32 TFLOPS  0.886922  OK      
+fp32       8        huber        181.82 GB/s       18.51 TFLOPS  0.879944  OK      
+fp32       8        irls         137.96 GB/s       18.49 TFLOPS  0.846268  OK      
+
+
+--------------------------------------------------------------------------------
+SAMPLE MEASUREMENTS (first 10)
+--------------------------------------------------------------------------------
+
+Config 0001: 128×128×128 (fp32) - 7.46 μs, I=21.3 ops/byte
+Config 0001: 128×128×128 (fp32) - 7.33 μs, I=21.3 ops/byte
+Config 0001: 128×128×128 (fp32) - 7.20 μs, I=21.3 ops/byte
+Config 0001: 128×128×128 (fp32) - 7.33 μs, I=21.3 ops/byte
+Config 0001: 128×128×128 (fp32) - 7.14 μs, I=21.3 ops/byte
+Config 0002: 128×128×128 (fp32) - 30.24 μs, I=21.3 ops/byte
+Config 0002: 128×128×128 (fp32) - 29.95 μs, I=21.3 ops/byte
+Config 0002: 128×128×128 (fp32) - 29.95 μs, I=21.3 ops/byte
+Config 0002: 128×128×128 (fp32) - 29.92 μs, I=21.3 ops/byte
+Config 0002: 128×128×128 (fp32) - 29.92 μs, I=21.3 ops/byte
+
+... and 5417 more measurements
+
+================================================================================
+END OF REPORT
+================================================================================
