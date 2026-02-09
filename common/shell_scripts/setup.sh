@@ -34,7 +34,7 @@ echo "Upgrading pip..."
 python -m pip install --upgrade pip -q
 
 echo "Installing base dependencies..."
-pip install numpy>=2.0.0 tensorboard>=2.20.0 scipy>=1.7.0 scikit-learn>=1.0.0 -q
+pip install numpy>=2.0.0 tensorboard>=2.20.0 scipy>=1.7.0 scikit-learn>=1.0.0 PyYAML>=6.0.0 pandas>=2.0.0 matplotlib>=3.7.0 seaborn>=0.12.0 -q
 
 echo ""
 echo "Select CUDA version:"
