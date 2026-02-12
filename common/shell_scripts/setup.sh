@@ -37,12 +37,13 @@ echo "Installing base dependencies..."
 pip install numpy>=2.0.0 tensorboard>=2.20.0 scipy>=1.7.0 scikit-learn>=1.0.0 PyYAML>=6.0.0 pandas>=2.0.0 matplotlib>=3.7.0 seaborn>=0.12.0 -q
 
 echo ""
-echo "Select CUDA version:"
-echo "  1) CUDA 11.8 (Driver >= 450)"
-echo "  2) CUDA 12.1 (Driver >= 525)"
-echo "  3) CUDA 12.4 (Driver >= 550)"
+echo "Select PyTorch version:"
+echo "  1) PyTorch with CUDA 11.8 (Driver >= 450)"
+echo "  2) PyTorch with CUDA 12.1 (Driver >= 525)"
+echo "  3) PyTorch with CUDA 12.4 (Driver >= 550)"
+echo "  4) PyTorch CPU-only (skip CUDA to avoid conflicts)"
 echo ""
-read -p "Choose [1-3]: " choice
+read -p "Choose [1-4]: " choice
 
 case $choice in
     1)
@@ -56,6 +57,10 @@ case $choice in
     3)
         echo "Installing PyTorch with CUDA 12.4..."
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 -q
+        ;;
+    4)
+        echo "Installing PyTorch CPU-only (no CUDA)..."
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu -q
         ;;
     *)
         echo "Invalid choice"
@@ -81,5 +86,7 @@ fi
 echo ""
 echo "To activate in new terminals: source venv/bin/activate"
 echo "To run profiling: cd compute && python profile_matmul.py"
-echo "To switch CUDA versions: ./swap_pytorch_cuda.sh <118|121|124>"
+if [ "$choice" != "4" ]; then
+    echo "To switch CUDA versions: ./swap_pytorch_cuda.sh <118|121|124>"
+fi
 
