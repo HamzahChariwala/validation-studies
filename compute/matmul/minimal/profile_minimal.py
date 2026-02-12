@@ -860,16 +860,17 @@ def save_results(measurements: List[Dict[str, Any]], roofline_models: Dict[str, 
             writer.writerows(measurements)
     print(f"✓ Saved measurements CSV: {csv_path}")
     
-    # 2. Save roofline parameters CSV (overall models per precision) - MULTI-METHOD
+    # 2. Save roofline parameters CSV (overall models per precision, aggregated across GPUs) - MULTI-METHOD
     roofline_path = os.path.join(output_dir, 'roofline_parameters.csv')
     with open(roofline_path, 'w', newline='') as f:
         fieldnames = ['precision', 'method', 'bandwidth_gb_per_sec', 'peak_tflops', 'r_squared', 'num_samples', 'success']
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         
-        # Write overall models per precision (all 3 methods)
-        for dtype in sorted(roofline_models['per_precision_overall'].keys()):
-            model_group = roofline_models['per_precision_overall'][dtype]
+        # Write overall models per precision (all 3 methods) - aggregated across all GPUs
+        overall_models = roofline_models.get('overall', roofline_models)
+        for dtype in sorted(overall_models['per_precision_overall'].keys()):
+            model_group = overall_models['per_precision_overall'][dtype]
             for method_name in ['l2', 'huber', 'irls']:
                 if method_name in model_group.get('methods', {}):
                     method_result = model_group['methods'][method_name]
@@ -893,18 +894,19 @@ def save_results(measurements: List[Dict[str, Any]], roofline_models: Dict[str, 
                             'num_samples': model_group['num_samples'],
                             'success': False
                         })
-    print(f"✓ Saved roofline parameters CSV: {roofline_path}")
+    print(f"✓ Saved aggregated roofline parameters CSV: {roofline_path}")
     
-    # 2b. Save detailed roofline parameters CSV (per precision and batch size) - MULTI-METHOD
+    # 2b. Save detailed roofline parameters CSV (per precision and batch size, aggregated across GPUs) - MULTI-METHOD
     roofline_detailed_path = os.path.join(output_dir, 'roofline_parameters_detailed.csv')
     with open(roofline_detailed_path, 'w', newline='') as f:
         fieldnames = ['precision', 'batch_size', 'method', 'bandwidth_gb_per_sec', 'peak_tflops', 'r_squared', 'num_samples', 'success']
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         
-        # Write per (precision, batch_size) models (all 3 methods)
-        for key in sorted(roofline_models['per_precision_batch'].keys()):
-            model_group = roofline_models['per_precision_batch'][key]
+        # Write per (precision, batch_size) models (all 3 methods) - aggregated across all GPUs
+        overall_models = roofline_models.get('overall', roofline_models)
+        for key in sorted(overall_models['per_precision_batch'].keys()):
+            model_group = overall_models['per_precision_batch'][key]
             dtype = model_group.get('dtype', key.split('_')[0])
             batch_size = model_group.get('batch_size', 'N/A')
             
@@ -933,7 +935,89 @@ def save_results(measurements: List[Dict[str, Any]], roofline_models: Dict[str, 
                             'num_samples': model_group['num_samples'],
                             'success': False
                         })
-    print(f"✓ Saved detailed roofline parameters CSV: {roofline_detailed_path}")
+    print(f"✓ Saved aggregated detailed roofline parameters CSV: {roofline_detailed_path}")
+    
+    # 2c. Save per-GPU roofline parameters CSV files
+    if 'per_gpu' in roofline_models:
+        for gpu_id in sorted(roofline_models['per_gpu'].keys()):
+            gpu_models = roofline_models['per_gpu'][gpu_id]
+            
+            # Per-GPU overall roofline parameters
+            gpu_roofline_path = os.path.join(output_dir, f'roofline_parameters_gpu{gpu_id}.csv')
+            with open(gpu_roofline_path, 'w', newline='') as f:
+                fieldnames = ['gpu_id', 'precision', 'method', 'bandwidth_gb_per_sec', 'peak_tflops', 'r_squared', 'num_samples', 'success']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for dtype in sorted(gpu_models['per_precision_overall'].keys()):
+                    model_group = gpu_models['per_precision_overall'][dtype]
+                    for method_name in ['l2', 'huber', 'irls']:
+                        if method_name in model_group.get('methods', {}):
+                            method_result = model_group['methods'][method_name]
+                            if method_result.get('success'):
+                                writer.writerow({
+                                    'gpu_id': gpu_id,
+                                    'precision': dtype,
+                                    'method': method_name,
+                                    'bandwidth_gb_per_sec': method_result['bandwidth_gb_per_sec'],
+                                    'peak_tflops': method_result['peak_tflops'],
+                                    'r_squared': method_result['r_squared'],
+                                    'num_samples': model_group['num_samples'],
+                                    'success': True
+                                })
+                            else:
+                                writer.writerow({
+                                    'gpu_id': gpu_id,
+                                    'precision': dtype,
+                                    'method': method_name,
+                                    'bandwidth_gb_per_sec': 'N/A',
+                                    'peak_tflops': 'N/A',
+                                    'r_squared': 'N/A',
+                                    'num_samples': model_group['num_samples'],
+                                    'success': False
+                                })
+            print(f"✓ Saved GPU {gpu_id} roofline parameters: {gpu_roofline_path}")
+            
+            # Per-GPU detailed roofline parameters
+            gpu_detailed_path = os.path.join(output_dir, f'roofline_parameters_gpu{gpu_id}_detailed.csv')
+            with open(gpu_detailed_path, 'w', newline='') as f:
+                fieldnames = ['gpu_id', 'precision', 'batch_size', 'method', 'bandwidth_gb_per_sec', 'peak_tflops', 'r_squared', 'num_samples', 'success']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for key in sorted(gpu_models['per_precision_batch'].keys()):
+                    model_group = gpu_models['per_precision_batch'][key]
+                    dtype = model_group.get('dtype', key.split('_')[0])
+                    batch_size = model_group.get('batch_size', 'N/A')
+                    
+                    for method_name in ['l2', 'huber', 'irls']:
+                        if method_name in model_group.get('methods', {}):
+                            method_result = model_group['methods'][method_name]
+                            if method_result.get('success'):
+                                writer.writerow({
+                                    'gpu_id': gpu_id,
+                                    'precision': dtype,
+                                    'batch_size': batch_size,
+                                    'method': method_name,
+                                    'bandwidth_gb_per_sec': method_result['bandwidth_gb_per_sec'],
+                                    'peak_tflops': method_result['peak_tflops'],
+                                    'r_squared': method_result['r_squared'],
+                                    'num_samples': model_group['num_samples'],
+                                    'success': True
+                                })
+                            else:
+                                writer.writerow({
+                                    'gpu_id': gpu_id,
+                                    'precision': dtype,
+                                    'batch_size': batch_size,
+                                    'method': method_name,
+                                    'bandwidth_gb_per_sec': 'N/A',
+                                    'peak_tflops': 'N/A',
+                                    'r_squared': 'N/A',
+                                    'num_samples': model_group['num_samples'],
+                                    'success': False
+                                })
+            print(f"✓ Saved GPU {gpu_id} detailed roofline parameters: {gpu_detailed_path}")
     
     # 3. Save GPU info
     gpu_info_path = os.path.join(output_dir, 'gpu_info.txt')
@@ -986,14 +1070,15 @@ def save_results(measurements: List[Dict[str, Any]], roofline_models: Dict[str, 
         f.write("\n")
         
         f.write("-" * 80 + "\n")
-        f.write("OVERALL ROOFLINE MODELS (AGGREGATED BY PRECISION) - ALL 3 METHODS\n")
+        f.write("OVERALL ROOFLINE MODELS (AGGREGATED ACROSS ALL GPUs) - ALL 3 METHODS\n")
         f.write("-" * 80 + "\n\n")
         
         f.write(f"{'Precision':<12} {'Method':<8} {'Bandwidth':<16} {'Peak FLOPS':<16} {'R²':<10} {'Status':<8}\n")
         f.write("-" * 80 + "\n")
         
-        for dtype in sorted(roofline_models['per_precision_overall'].keys()):
-            model_group = roofline_models['per_precision_overall'][dtype]
+        overall_models = roofline_models.get('overall', roofline_models)
+        for dtype in sorted(overall_models['per_precision_overall'].keys()):
+            model_group = overall_models['per_precision_overall'][dtype]
             for method_name in ['l2', 'huber', 'irls']:
                 if method_name in model_group.get('methods', {}):
                     method_result = model_group['methods'][method_name]
@@ -1005,15 +1090,41 @@ def save_results(measurements: List[Dict[str, Any]], roofline_models: Dict[str, 
                         f.write(f"{dtype:<12} {method_name:<8} {'N/A':<16} {'N/A':<16} {'N/A':<10} {'FAILED':<8}\n")
             f.write("\n")  # Spacing between dtypes
         
+        # Add per-GPU roofline models summary
+        if 'per_gpu' in roofline_models:
+            f.write("-" * 80 + "\n")
+            f.write("PER-GPU ROOFLINE MODELS (OVERALL BY PRECISION)\n")
+            f.write("-" * 80 + "\n\n")
+            
+            for gpu_id in sorted(roofline_models['per_gpu'].keys()):
+                f.write(f"GPU {gpu_id}:\n")
+                f.write(f"{'  Precision':<12} {'Method':<8} {'Bandwidth':<16} {'Peak FLOPS':<16} {'R²':<10} {'Status':<8}\n")
+                f.write("  " + "-" * 78 + "\n")
+                
+                gpu_models = roofline_models['per_gpu'][gpu_id]
+                for dtype in sorted(gpu_models['per_precision_overall'].keys()):
+                    model_group = gpu_models['per_precision_overall'][dtype]
+                    for method_name in ['l2', 'huber', 'irls']:
+                        if method_name in model_group.get('methods', {}):
+                            method_result = model_group['methods'][method_name]
+                            if method_result.get('success'):
+                                f.write(f"  {dtype:<10} {method_name:<8} {method_result['bandwidth_gb_per_sec']:>12.2f} GB/s  "
+                                       f"{method_result['peak_tflops']:>12.2f} TFLOPS  "
+                                       f"{method_result['r_squared']:>8.6f}  {'OK':<8}\n")
+                            else:
+                                f.write(f"  {dtype:<10} {method_name:<8} {'N/A':<16} {'N/A':<16} {'N/A':<10} {'FAILED':<8}\n")
+                    f.write("\n")
+                f.write("\n")
+        
         f.write("-" * 80 + "\n")
-        f.write("DETAILED ROOFLINE MODELS (BY PRECISION AND BATCH SIZE) - ALL 3 METHODS\n")
+        f.write("DETAILED ROOFLINE MODELS (AGGREGATED, BY PRECISION AND BATCH SIZE) - ALL 3 METHODS\n")
         f.write("-" * 80 + "\n\n")
         
         f.write(f"{'Precision':<10} {'Batch':<8} {'Method':<8} {'Bandwidth':<14} {'Peak FLOPS':<14} {'R²':<10} {'Status':<8}\n")
         f.write("-" * 80 + "\n")
         
-        for key in sorted(roofline_models['per_precision_batch'].keys()):
-            model_group = roofline_models['per_precision_batch'][key]
+        for key in sorted(overall_models['per_precision_batch'].keys()):
+            model_group = overall_models['per_precision_batch'][key]
             dtype = model_group.get('dtype', key.split('_')[0])
             batch = model_group.get('batch_size', 'N/A')
             
@@ -1192,6 +1303,13 @@ def main():
         if rank == 0:
             all_measurements = measurements
     
+    # All ranks save their GPU info for gathering
+    gpu_info_file = os.path.join(output_dir, f'gpu_info_rank_{rank}.json')
+    with open(gpu_info_file, 'w') as f:
+        json.dump(gpu_info, f)
+    
+    barrier_all()
+    
     # Only rank 0 fits models and saves results
     if rank == 0:
         if not all_measurements:
@@ -1200,8 +1318,26 @@ def main():
         
         print(f"\nTotal measurements from all GPUs: {len(all_measurements)}")
         
-        # Fit roofline models
-        roofline_models = fit_roofline_models(all_measurements, rank=0)
+        # Fit roofline models on aggregated data
+        roofline_models_overall = fit_roofline_models(all_measurements, rank=0)
+        
+        # Fit per-GPU roofline models
+        print("\n" + "=" * 80)
+        print("FITTING PER-GPU ROOFLINE MODELS")
+        print("=" * 80)
+        
+        roofline_models_per_gpu = {}
+        for r in range(world_size):
+            gpu_measurements = [m for m in all_measurements if m['rank'] == r]
+            if gpu_measurements:
+                print(f"\nGPU {r}: {len(gpu_measurements)} measurements")
+                roofline_models_per_gpu[r] = fit_roofline_models(gpu_measurements, rank=0)
+        
+        # Combine into single structure
+        roofline_models = {
+            'overall': roofline_models_overall,
+            'per_gpu': roofline_models_per_gpu
+        }
         
         # Gather GPU info from all ranks
         all_gpu_info = {'gpus': {}}
@@ -1217,11 +1353,6 @@ def main():
         
         # Cleanup traces
         cleanup_traces(output_dir)
-    else:
-        # Non-rank-0: save GPU info for gathering
-        gpu_info_file = os.path.join(output_dir, f'gpu_info_rank_{rank}.json')
-        with open(gpu_info_file, 'w') as f:
-            json.dump(gpu_info, f)
     
     barrier_all()
     
@@ -1241,11 +1372,13 @@ def main():
     if rank == 0:
         print(f"\nResults saved to: {output_dir}")
         print("\nKey files:")
-        print(f"  - RESULTS_SUMMARY.txt                (human-readable report)")
-        print(f"  - results.json                       (complete structured data)")
-        print(f"  - roofline_parameters.csv            (overall roofline params per precision)")
-        print(f"  - roofline_parameters_detailed.csv   (roofline params by precision & batch)")
-        print(f"  - measurements.csv                   (raw timing data)")
+        print(f"  - RESULTS_SUMMARY.txt                      (human-readable report with per-GPU results)")
+        print(f"  - results.json                             (complete structured data)")
+        print(f"  - roofline_parameters.csv                  (aggregated roofline params per precision)")
+        print(f"  - roofline_parameters_detailed.csv         (aggregated roofline params by precision & batch)")
+        print(f"  - roofline_parameters_gpu*.csv             (per-GPU roofline params)")
+        print(f"  - roofline_parameters_gpu*_detailed.csv    (per-GPU detailed roofline params)")
+        print(f"  - measurements.csv                         (raw timing data with GPU IDs)")
 
 
 if __name__ == "__main__":
